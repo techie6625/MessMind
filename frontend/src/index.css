@@ -1,0 +1,24 @@
+/* 
+  index.css — Entry CSS file for React
+  We import Tailwind CSS directives here.
+  These three @tailwind lines inject all of Tailwind's
+  base styles, component styles, and utility classes.
+*/
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Smooth scrolling for the whole page */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom animation for feedback messages */
+@keyframes pulse-once {
+  0% { opacity: 0; transform: translateY(-4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.animate-pulse-once {
+  animation: pulse-once 0.3s ease-out;
+}
