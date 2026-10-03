@@ -1,9 +1,13 @@
 /*
 =============================================================================
-FILE: Dashboard.js  —  Kitchen Dashboard v3  (Glassmorphism Dark)
+FILE: Dashboard.js  —  Kitchen Dashboard v4  (No-ML, Manual Analytics)
 =============================================================================
-Design: Deep dark bg-[#0B0F19], glass cards, neon emerald AI accents,
-        cyan gradient headings, dark audit table, glowing Plates Saved widget.
+Changes from v3:
+  • Removed ALL ML prediction controls, weather API, Plates Saved widget
+  • Removed any mention of "AI", "Model", "Prediction"
+  • OverviewTab: now shows simple manual cancellation stats + reason breakdown
+  • AuditLogTab: now displays the `reason` column prominently
+  • New RatingsTab: aggregated anonymous star ratings per meal
 =============================================================================
 */
 
@@ -17,17 +21,11 @@ const HOSTELS      = ['Chitrakot', 'Mainpat', 'Sirpur', 'Mahanadi', 'Indravati',
 const MEAL_TYPES   = ['Breakfast', 'Lunch', 'Snacks', 'Dinner'];
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-const countToTrafficLevel = (count) => {
-  if (count >= 8) return 'High';
-  if (count >= 3) return 'Medium';
-  return 'Low';
-};
-
 const MEAL_CONFIG = {
-  Breakfast: { icon: '🌅', label: 'Breakfast', accentColor: 'amber'   },
-  Lunch:     { icon: '☀️', label: 'Lunch',     accentColor: 'emerald' },
-  Snacks:    { icon: '🫖', label: 'Snacks',    accentColor: 'violet'  },
-  Dinner:    { icon: '🌙', label: 'Dinner',    accentColor: 'indigo'  },
+  Breakfast: { icon: '🌅', label: 'Breakfast' },
+  Lunch:     { icon: '☀️', label: 'Lunch'     },
+  Snacks:    { icon: '🫖', label: 'Snacks'    },
+  Dinner:    { icon: '🌙', label: 'Dinner'    },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,20 +64,20 @@ const Toast = ({ message, type = 'success', onDismiss }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STAT CARD — glass KPI widget
+// STAT CARD
 // ─────────────────────────────────────────────────────────────────────────────
 const StatCard = ({ title, value, subtitle, emoji, highlight = false }) => (
   <div className={`rounded-2xl border p-4 flex flex-col gap-1.5 transition-all duration-300
     ${highlight
-      ? 'bg-emerald-500/10 border-emerald-500/30 shadow-lg shadow-emerald-500/10'
+      ? 'bg-cyan-500/10 border-cyan-500/30 shadow-lg shadow-cyan-500/10'
       : 'bg-white/5 border-white/10 hover:bg-white/8 hover:border-white/20 hover:-translate-y-0.5'
     }`}>
     <div className="text-2xl">{emoji}</div>
-    <div className={`text-3xl font-black leading-none ${highlight ? 'text-emerald-400' : 'text-white'}`}>
+    <div className={`text-3xl font-black leading-none ${highlight ? 'text-cyan-400' : 'text-white'}`}>
       {value ?? '—'}
     </div>
-    <div className={`font-semibold text-xs ${highlight ? 'text-emerald-300' : 'text-slate-400'}`}>{title}</div>
-    {subtitle && <div className={`text-xs leading-tight ${highlight ? 'text-emerald-400/60' : 'text-slate-500'}`}>{subtitle}</div>}
+    <div className={`font-semibold text-xs ${highlight ? 'text-cyan-300' : 'text-slate-400'}`}>{title}</div>
+    {subtitle && <div className={`text-xs leading-tight ${highlight ? 'text-cyan-400/60' : 'text-slate-500'}`}>{subtitle}</div>}
   </div>
 );
 
@@ -104,272 +102,122 @@ function useSocket() {
 }
 
 // =============================================================================
-// WEATHER CONTROL — Live Open-Meteo API + manual override
-// =============================================================================
-function WeatherControl({ weather, onChange }) {
-  const [liveWeather, setLiveWeather] = useState(null);
-  const [fetching,    setFetching]    = useState(false);
-  const [fetchError,  setFetchError]  = useState(false);
-
-  const fetchWeather = useCallback(async () => {
-    setFetching(true); setFetchError(false);
-    try {
-      const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=21.2497&longitude=81.6029&current=weathercode&timezone=Asia%2FKolkata');
-      const d = await r.json();
-      const code = d?.current?.weathercode ?? 0;
-      const auto = code >= 51 ? 'Rain' : 'Clear';
-      setLiveWeather(auto);
-      onChange(auto);
-    } catch { setFetchError(true); }
-    finally { setFetching(false); }
-  }, []); // eslint-disable-line
-
-  useEffect(() => { fetchWeather(); }, [fetchWeather]);
-
-  return (
-    <div className="col-span-2">
-      <div className="flex items-center justify-between mb-1.5">
-        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">☁️ Weather</label>
-        <div className="flex items-center gap-2">
-          {fetching && (
-            <span className="text-xs text-cyan-400 flex items-center gap-1">
-              <div className="w-3 h-3 border-2 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
-              Fetching live…
-            </span>
-          )}
-          {!fetching && liveWeather && !fetchError && (
-            <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
-              🛰️ Live: {liveWeather === 'Clear' ? '☀️' : '🌧️'} {liveWeather}
-            </span>
-          )}
-          {fetchError && <span className="text-xs text-rose-400">⚠️ API failed</span>}
-          <button type="button" onClick={fetchWeather} disabled={fetching}
-            className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors disabled:opacity-30 font-bold">
-            🔄
-          </button>
-        </div>
-      </div>
-      <select value={weather} onChange={e => onChange(e.target.value)}
-        className="w-full px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm
-                   focus:outline-none focus:border-cyan-500/60 transition-all">
-        <option value="Clear">☀️ Clear</option>
-        <option value="Rain">🌧️ Rain</option>
-      </select>
-      <p className="text-xs text-slate-500 mt-1">
-        {liveWeather && !fetchError
-          ? `Auto-detected: ${liveWeather}. Override manually above.`
-          : 'Manual selection (live fetch unavailable).'}
-      </p>
-    </div>
-  );
-}
-
-// =============================================================================
-// TAB 1: OVERVIEW
+// TAB 1: OVERVIEW — Manual analytics only
 // =============================================================================
 function OverviewTab({ counts, connected }) {
   const [selectedHostel, setSelectedHostel] = useState('Chitrakot');
   const [mealType,       setMealType]       = useState('Lunch');
-  const [conditions,     setConditions]     = useState({ weather: 'Clear', menu_item: 'Paneer' });
   const [data,           setData]           = useState(null);
   const [loading,        setLoading]        = useState(false);
   const [error,          setError]          = useState(null);
 
-  const liveCount    = counts[selectedHostel] || 0;
-  const trafficLevel = countToTrafficLevel(liveCount);
-
-  const trafficStyles = {
-    Low:    { bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', text: 'text-emerald-400', dot: 'bg-emerald-400' },
-    Medium: { bg: 'bg-amber-500/10',   border: 'border-amber-500/20',   text: 'text-amber-400',   dot: 'bg-amber-400'   },
-    High:   { bg: 'bg-rose-500/10',    border: 'border-rose-500/20',    text: 'text-rose-400',    dot: 'bg-rose-400'    },
-  };
-  const trafficStyle = trafficStyles[trafficLevel];
+  const totalDeliveries = Object.values(counts).reduce((s, c) => s + c, 0);
 
   const fetchDashboard = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const params = new URLSearchParams({
-        weather: conditions.weather, menu_item: conditions.menu_item, meal_type: mealType, hostel: selectedHostel,
-      });
+      const params = new URLSearchParams({ meal_type: mealType, hostel: selectedHostel });
       const r = await fetch(`${API_BASE}/dashboard?${params}`);
       const d = await r.json();
       if (!d.success) throw new Error(d.error);
       setData(d);
     } catch (e) { setError(e.message || 'Failed to load dashboard'); }
     finally { setLoading(false); }
-  }, [conditions, mealType, selectedHostel]);
+  }, [mealType, selectedHostel]);
 
   useEffect(() => { fetchDashboard(); }, [fetchDashboard]);
 
-  const prevCountRef = useRef(liveCount);
-  useEffect(() => {
-    if (prevCountRef.current !== liveCount) {
-      prevCountRef.current = liveCount;
-      fetchDashboard();
-    }
-  }, [liveCount, fetchDashboard]);
-
   return (
     <div className="space-y-4">
-      {/* Hostel selector */}
+      {/* Hostel + meal selector */}
       <GlassCard>
+        <h3 className="font-black text-white text-sm mb-3">
+          📊 <span className="bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">Today's Cancellation Analytics</span>
+        </h3>
         <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">🏠 Select Hostel</label>
         <select value={selectedHostel} onChange={e => setSelectedHostel(e.target.value)}
           className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white font-bold text-sm
-                     focus:outline-none focus:border-cyan-500/60 transition-all">
+                     focus:outline-none focus:border-cyan-500/60 transition-all mb-3">
           {HOSTELS.map(h => <option key={h} value={h}>{h} Hostel</option>)}
         </select>
 
-        <div className="mt-3 flex gap-3">
-          <div className="flex-1 bg-white/5 border border-white/10 rounded-xl p-3 text-center">
-            <div className="text-2xl font-black text-white">{liveCount}</div>
-            <div className="text-xs text-slate-500 mt-0.5">Deliveries today</div>
-          </div>
-          <div className={`flex-1 ${trafficStyle.bg} border ${trafficStyle.border} rounded-xl p-3 text-center`}>
-            <div className="flex items-center justify-center gap-1.5 mb-0.5">
-              <div className={`w-2 h-2 rounded-full ${trafficStyle.dot} animate-pulse`} />
-              <div className={`text-base font-black ${trafficStyle.text}`}>{trafficLevel}</div>
-            </div>
-            <div className={`text-xs ${trafficStyle.text} opacity-70`}>Traffic level</div>
-          </div>
-          <div className={`px-3 flex flex-col items-center justify-center gap-1 rounded-xl border ${connected ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-white/5 border-white/10'}`}>
-            <div className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-            <span className={`text-xs font-semibold ${connected ? 'text-emerald-400' : 'text-slate-500'}`}>{connected ? 'Live' : 'Off'}</span>
-          </div>
-        </div>
-
-        <div className="mt-3 bg-cyan-500/10 border border-cyan-500/20 rounded-xl p-3 text-xs text-cyan-400">
-          🔌 <strong>Live ML Integration:</strong> Guard taps on the Security screen update traffic fed directly into the AI prediction.
-        </div>
-      </GlassCard>
-
-      {/* Prediction controls */}
-      <GlassCard>
-        <h3 className="font-black text-white text-sm mb-3 flex items-center gap-2">
-          ⚙️ <span className="bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">Prediction Controls</span>
-        </h3>
-        <div className="grid grid-cols-2 gap-3">
-          {/* Meal selector */}
-          <div className="col-span-2">
-            <label className="block text-xs font-bold text-slate-400 mb-1.5 uppercase tracking-widest">Predict for meal:</label>
-            <div className="grid grid-cols-4 gap-1.5">
-              {MEAL_TYPES.map(m => (
-                <button key={m} onClick={() => setMealType(m)}
-                  className={`py-2.5 rounded-xl text-xs font-bold transition-all border
-                    ${mealType === m
-                      ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300 shadow-lg shadow-cyan-500/10'
-                      : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10 hover:text-white'}`}>
-                  {MEAL_CONFIG[m].icon} {m}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Live weather + override */}
-          <WeatherControl weather={conditions.weather} onChange={w => setConditions(p => ({ ...p, weather: w }))} />
-
-          {/* Menu type */}
-          <div>
-            <label className="block text-xs font-bold text-slate-400 mb-1.5 uppercase tracking-widest">🍛 Menu</label>
-            <select value={conditions.menu_item} onChange={e => setConditions(p => ({ ...p, menu_item: e.target.value }))}
-              className="w-full px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-cyan-500/60 transition-all">
-              <option value="Paneer">🧀 Paneer</option>
-              <option value="Tori">🥒 Tori</option>
-            </select>
-          </div>
-
-          {/* Traffic (auto) */}
-          <div className="col-span-2">
-            <label className="block text-xs font-bold text-slate-400 mb-1.5 uppercase tracking-widest">
-              🛵 Delivery Traffic <span className="text-cyan-400 normal-case font-semibold">(auto from {selectedHostel})</span>
-            </label>
-            <div className={`w-full px-4 py-2.5 rounded-xl border font-bold text-sm flex items-center gap-2 ${trafficStyle.bg} ${trafficStyle.border} ${trafficStyle.text}`}>
-              <div className={`w-2.5 h-2.5 rounded-full ${trafficStyle.dot}`} />
-              {trafficLevel} ({liveCount} deliveries → auto-mapped)
-            </div>
-          </div>
+        <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">🍽️ Analyse for Meal</label>
+        <div className="grid grid-cols-4 gap-1.5">
+          {MEAL_TYPES.map(m => (
+            <button key={m} onClick={() => setMealType(m)}
+              className={`py-2.5 rounded-xl text-xs font-bold transition-all border
+                ${mealType === m
+                  ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300 shadow-lg shadow-cyan-500/10'
+                  : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10 hover:text-white'}`}>
+              {MEAL_CONFIG[m].icon} {m}
+            </button>
+          ))}
         </div>
 
         <button onClick={fetchDashboard} disabled={loading}
           className="mt-4 w-full py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500
                      text-white rounded-xl text-sm font-black disabled:opacity-50 transition-all active:scale-95 flex items-center justify-center gap-2">
-          {loading ? <><Spinner small /> Refreshing…</> : '🔄 Refresh AI Prediction'}
+          {loading ? <><Spinner small /> Loading…</> : '🔄 Refresh Data'}
         </button>
       </GlassCard>
+
+      {/* Live delivery strip */}
+      <div className="bg-white/5 border border-white/10 rounded-2xl px-5 py-3 flex items-center justify-between">
+        <div>
+          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Total Deliveries Today</p>
+          <p className="text-2xl font-black text-white">{totalDeliveries}</p>
+        </div>
+        <div className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold
+          ${connected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-white/5 border-white/10 text-slate-500'}`}>
+          <span className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+          {connected ? 'Live' : 'Offline'}
+        </div>
+      </div>
 
       {error && <div className="bg-rose-500/10 border border-rose-500/20 rounded-2xl p-4 text-rose-400 text-sm">⚠️ {error}</div>}
       {loading && !data && <PageLoader />}
 
       {data && (
         <>
-          {/* Equation card */}
-          <GlassCard>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">
-              {MEAL_CONFIG[mealType].icon} {mealType} Calculation — {selectedHostel} Hostel
-            </p>
-            <div className="flex flex-wrap items-center gap-2 text-sm font-mono">
-              <span className="bg-blue-500/20 text-blue-300 border border-blue-500/20 px-3 py-1.5 rounded-lg font-bold">{data.total_enrolled} Total</span>
-              <span className="text-slate-500 font-bold">−</span>
-              <span className="bg-rose-500/20 text-rose-300 border border-rose-500/20 px-3 py-1.5 rounded-lg font-bold">{data.manual_cancellations} Cancelled</span>
-              <span className="text-slate-500 font-bold">−</span>
-              <span className="bg-violet-500/20 text-violet-300 border border-violet-500/20 px-3 py-1.5 rounded-lg font-bold">{data.unreported_absences} AI Skip</span>
-              <span className="text-slate-500 font-bold">=</span>
-              <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-lg font-bold text-base shadow-lg shadow-emerald-500/10">
-                🍽️ {data.final_plates_to_cook}
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 mt-2">
-              Traffic: <strong className="text-slate-300">{data.derived_traffic_level}</strong> from {liveCount} live deliveries
-              {data.meal_scale_factor !== 1 && ` · scaled ${(data.meal_scale_factor * 100).toFixed(0)}% for ${mealType}`}
-            </p>
-          </GlassCard>
-
           {/* KPI grid */}
           <div className="grid grid-cols-2 gap-3">
-            <StatCard emoji="👥" title="Total Enrolled"              value={data.total_enrolled}       subtitle="All mess members" />
-            <StatCard emoji="❌" title={`${mealType} Cancellations`} value={data.manual_cancellations} subtitle="App cancellations" />
-            <StatCard emoji="🤖" title="AI Predicted Skips"          value={data.unreported_absences}  subtitle="Won't show, didn't cancel" />
-            <StatCard emoji="🍽️" title="Plates to Cook"              value={data.final_plates_to_cook} subtitle="Final recommendation" highlight />
+            <StatCard emoji="👥" title="Total Enrolled"             value={data.total_enrolled}      subtitle="All mess members" />
+            <StatCard emoji="❌" title={`${mealType} Cancellations`} value={data.meal_cancellations}  subtitle="Opted out today" />
+            <StatCard emoji="✅" title="Expected Attendance"         value={data.expected_attendance} subtitle={`${mealType} today`} highlight />
+            <StatCard emoji="📦" title="Total Cancellations"         value={data.total_cancellations} subtitle="All meals today" />
           </div>
 
-          {/* ── PLATES SAVED — neon emerald hero card ─────────────────── */}
-          <div className="bg-gradient-to-br from-emerald-500/20 to-teal-500/10 border border-emerald-500/30 rounded-2xl p-5 shadow-xl shadow-emerald-500/10">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-xs font-black text-emerald-400/70 uppercase tracking-widest mb-1">♻️ Plates Saved Today</p>
-                <p className="text-6xl font-black text-emerald-400 leading-none">
-                  {data.total_enrolled - data.final_plates_to_cook}
-                </p>
-                <p className="text-emerald-400/60 text-xs mt-2">
-                  {data.total_enrolled} enrolled − {data.final_plates_to_cook} to cook
-                </p>
+          {/* Reason breakdown */}
+          {data.reason_breakdown && data.reason_breakdown.length > 0 && (
+            <GlassCard>
+              <h3 className="font-black text-white text-sm mb-3">
+                📋 Why Students Cancelled <span className="text-slate-400 font-normal">({mealType})</span>
+              </h3>
+              <div className="space-y-2">
+                {data.reason_breakdown.map((r, i) => {
+                  const total = data.reason_breakdown.reduce((s, x) => s + x.count, 0);
+                  const pct   = total > 0 ? Math.round((r.count / total) * 100) : 0;
+                  return (
+                    <div key={i}>
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <span className="text-slate-300 font-semibold">{r.reason || 'Not specified'}</span>
+                        <span className="text-slate-400">{r.count} student{r.count !== 1 ? 's' : ''} · {pct}%</span>
+                      </div>
+                      <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-500"
+                          style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="text-right">
-                <div className="text-5xl opacity-20">♻️</div>
-                <div className="text-xs text-emerald-400/50 mt-1 font-semibold">
-                  ≈ {((data.total_enrolled - data.final_plates_to_cook) * 0.35).toFixed(1)} kg<br />food saved
-                </div>
-              </div>
-            </div>
-            <div className="mt-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-2.5 text-xs text-emerald-400/80">
-              <strong>Saved = Total Enrolled − Plates to Cook</strong><br />
-              Cancellations ({data.manual_cancellations}) + AI no-shows ({data.unreported_absences}) = {data.manual_cancellations + data.unreported_absences} plates not cooked
-            </div>
-          </div>
+            </GlassCard>
+          )}
 
-          {/* Safety buffer */}
-          <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4">
-            <h3 className="font-bold text-amber-300 text-sm flex items-center gap-2 mb-2">🧮 90th Percentile Safety Buffer (α = 0.90)</h3>
-            <div className="text-xs text-amber-300/70 space-y-1">
-              <p>Under-prediction penalty = <strong className="text-rose-400">0.90 × error</strong> (students go hungry)</p>
-              <p>Over-prediction penalty  = <strong className="text-emerald-400">0.10 × error</strong> (some waste, acceptable)</p>
-              <p className="pt-1 border-t border-amber-500/20">Model targets the <strong>90th percentile</strong> — safe on 9 out of 10 days.</p>
-            </div>
-          </div>
-
-          {data.ml_error && (
-            <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-3 text-xs text-yellow-300">
-              ⚠️ ML service unavailable. Start FastAPI on port 8000.
+          {data.meal_cancellations === 0 && (
+            <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4 text-center">
+              <div className="text-3xl mb-1">🎉</div>
+              <p className="text-emerald-300 font-bold">No cancellations for {mealType} today!</p>
             </div>
           )}
         </>
@@ -466,7 +314,7 @@ function MenuEditorTab() {
 }
 
 // =============================================================================
-// TAB 3: AUDIT LOG — dark glass table
+// TAB 3: AUDIT LOG — now shows `reason` column
 // =============================================================================
 function AuditLogTab() {
   const [auditDate,  setAuditDate]  = useState(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
@@ -557,9 +405,6 @@ function AuditLogTab() {
         <div className="bg-white/5 border border-white/10 rounded-2xl p-8 text-center">
           <div className="text-4xl mb-2">🎉</div>
           <p className="text-slate-400 font-semibold">No cancellations found</p>
-          <p className="text-slate-500 text-xs mt-1">
-            {filterMeal === 'All' ? 'No meals cancelled on this date.' : `No ${filterMeal} cancellations.`}
-          </p>
         </div>
       )}
 
@@ -571,6 +416,7 @@ function AuditLogTab() {
                 <tr className="bg-white/5 border-b border-white/10">
                   <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Student</th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Meal</th>
+                  <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Reason</th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Time (IST)</th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider">Flag</th>
                 </tr>
@@ -578,7 +424,6 @@ function AuditLogTab() {
               <tbody className="divide-y divide-white/5">
                 {filtered.map((c, i) => {
                   const rawTime = c.cancelled_at;
-                  // SQLite CURRENT_TIMESTAMP is UTC without 'Z' — append for correct IST parse
                   const timeStr = rawTime
                     ? new Date(rawTime.replace(' ', 'T') + 'Z').toLocaleTimeString('en-IN', {
                         timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit',
@@ -594,6 +439,11 @@ function AuditLogTab() {
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full border ${chipColor}`}>
                           {MEAL_CONFIG[c.meal_type]?.icon} {c.meal_type}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-slate-300 text-xs">
+                          {c.reason && c.reason.trim() ? c.reason : <span className="text-slate-600 italic">Not specified</span>}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-cyan-400 font-mono text-xs font-bold">{timeStr}</td>
@@ -619,16 +469,122 @@ function AuditLogTab() {
 }
 
 // =============================================================================
-// ROOT: Dashboard — full dark glassmorphism shell
+// TAB 4: MEAL RATINGS — Aggregated anonymous star ratings for mess contractor
+// =============================================================================
+function RatingsTab() {
+  const [ratingDate, setRatingDate] = useState(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
+  const [ratings,    setRatings]    = useState(null);
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState('');
+
+  const fetchRatings = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const r = await fetch(`${API_BASE}/api/ratings/all?meal_date=${ratingDate}`);
+      const d = await r.json();
+      if (d.success) setRatings(d.ratings);
+      else setError(d.error || 'Failed to load ratings.');
+    } catch { setError('Network error.'); }
+    finally { setLoading(false); }
+  }, [ratingDate]);
+
+  useEffect(() => { fetchRatings(); }, [fetchRatings]);
+
+  const mealAccents = {
+    Breakfast: { bar: 'bg-amber-400',   text: 'text-amber-300',   badge: 'bg-amber-500/20 border-amber-500/30 text-amber-300'   },
+    Lunch:     { bar: 'bg-emerald-400', text: 'text-emerald-300', badge: 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300' },
+    Snacks:    { bar: 'bg-violet-400',  text: 'text-violet-300',  badge: 'bg-violet-500/20 border-violet-500/30 text-violet-300'  },
+    Dinner:    { bar: 'bg-indigo-400',  text: 'text-indigo-300',  badge: 'bg-indigo-500/20 border-indigo-500/30 text-indigo-300'  },
+  };
+
+  const starEmoji = (s) => ['⭐','⭐','⭐','⭐','⭐'].slice(0, s).join('');
+
+  return (
+    <div className="space-y-4">
+      {/* Date picker */}
+      <GlassCard>
+        <div className="flex gap-3 items-end">
+          <div className="flex-1">
+            <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1.5">📅 Select Date</label>
+            <input type="date" value={ratingDate} onChange={e => setRatingDate(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm
+                         focus:outline-none focus:border-cyan-500/60 transition-all" />
+          </div>
+          <button onClick={fetchRatings} disabled={loading}
+            className="px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl text-sm font-black disabled:opacity-50 flex items-center gap-2">
+            {loading ? <Spinner small /> : '🔍 Load'}
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 mt-2">
+          🔒 All ratings are fully anonymous — no student names are stored or displayed.
+        </p>
+      </GlassCard>
+
+      {error && <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-3 text-rose-400 text-sm">{error}</div>}
+      {loading && <PageLoader />}
+
+      {!loading && ratings && MEAL_TYPES.map(mealType => {
+        const r    = ratings[mealType];
+        const acc  = mealAccents[mealType];
+        const maxCount = r.total_ratings > 0 ? Math.max(...r.breakdown.map(b => b.count)) : 1;
+
+        return (
+          <GlassCard key={mealType}>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">{MEAL_CONFIG[mealType].icon}</span>
+                <h3 className={`font-black text-base ${acc.text}`}>{mealType}</h3>
+              </div>
+              <div className="flex items-center gap-3">
+                {r.avg_stars && (
+                  <div className={`px-3 py-1.5 rounded-full border text-xs font-black ${acc.badge}`}>
+                    ⭐ {r.avg_stars} avg
+                  </div>
+                )}
+                <span className="text-slate-500 text-xs">{r.total_ratings} rating{r.total_ratings !== 1 ? 's' : ''}</span>
+              </div>
+            </div>
+
+            {r.total_ratings === 0 ? (
+              <div className="text-center py-4 text-slate-500 text-sm">No ratings yet for this meal.</div>
+            ) : (
+              <div className="space-y-2.5">
+                {r.breakdown.map(({ stars, count }) => (
+                  <div key={stars} className="flex items-center gap-3">
+                    <span className="text-xs text-slate-400 w-16 font-mono shrink-0">{starEmoji(stars)}</span>
+                    <div className="flex-1 h-5 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full ${acc.bar} rounded-full transition-all duration-700`}
+                        style={{ width: maxCount > 0 ? `${(count / maxCount) * 100}%` : '0%' }}
+                      />
+                    </div>
+                    <span className="text-white font-black text-sm w-8 text-right shrink-0">{count}</span>
+                    <span className="text-slate-500 text-xs w-16 shrink-0">
+                      {r.total_ratings > 0 ? `${Math.round((count / r.total_ratings) * 100)}%` : '0%'} students
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </GlassCard>
+        );
+      })}
+    </div>
+  );
+}
+
+// =============================================================================
+// ROOT: Dashboard — 4-tab shell
 // =============================================================================
 export default function Dashboard({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('overview');
   const { counts, connected } = useSocket();
 
   const tabs = [
-    { id: 'overview', label: 'Overview',    emoji: '📊' },
-    { id: 'menu',     label: 'Menu Editor', emoji: '📝' },
-    { id: 'audit',    label: 'Audit Log',   emoji: '🔍' },
+    { id: 'overview', label: 'Overview',   emoji: '📊' },
+    { id: 'menu',     label: 'Menu',       emoji: '📝' },
+    { id: 'audit',    label: 'Audit Log',  emoji: '🔍' },
+    { id: 'ratings',  label: 'Ratings',    emoji: '⭐' },
   ];
 
   const totalDeliveries = Object.values(counts).reduce((s, c) => s + c, 0);
@@ -639,7 +595,7 @@ export default function Dashboard({ user, onLogout }) {
       <div className="absolute top-0 left-0 w-96 h-96 bg-cyan-500/6 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-0 right-0 w-80 h-80 bg-emerald-500/6 rounded-full blur-3xl pointer-events-none" />
 
-      {/* ── HEADER ─────────────────────────────────────────────────────── */}
+      {/* HEADER */}
       <header className="sticky top-0 z-40 bg-[#0B0F19]/80 backdrop-blur-xl border-b border-white/8">
         <div className="max-w-2xl mx-auto px-4 py-3">
           <div className="flex items-center justify-between mb-3">
@@ -687,6 +643,7 @@ export default function Dashboard({ user, onLogout }) {
         {activeTab === 'overview' && <OverviewTab counts={counts} connected={connected} />}
         {activeTab === 'menu'     && <MenuEditorTab />}
         {activeTab === 'audit'    && <AuditLogTab />}
+        {activeTab === 'ratings'  && <RatingsTab />}
       </main>
     </div>
   );

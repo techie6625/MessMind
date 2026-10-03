@@ -174,10 +174,18 @@ const Card = ({ children, className = '' }) => (
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMPONENT: MealToggleCard — glass dark version
+// COMPONENT: MealToggleCard — with reason-prompt before cancellation
 // ─────────────────────────────────────────────────────────────────────────────
+const CANCEL_REASONS = [
+  'Ordered online',
+  "Don't like this meal",
+  'Other reasons',
+];
+
 const MealToggleCard = ({ mealType, cancelled, locked, menuItems, onToggle, loading }) => {
   const cfg = MEAL_CONFIG[mealType];
+  const [showReasonPicker, setShowReasonPicker] = useState(false);
+  const [selectedReason,   setSelectedReason]   = useState('');
 
   const stateStyles = {
     locked:    { card: 'bg-white/3 border-white/5 opacity-50',                             badge: 'bg-white/10 text-slate-500 border-white/10' },
@@ -187,9 +195,21 @@ const MealToggleCard = ({ mealType, cancelled, locked, menuItems, onToggle, load
   const state = locked ? 'locked' : cancelled ? 'cancelled' : 'active';
   const s = stateStyles[state];
 
+  const handleCancelClick = () => {
+    if (cancelled) { onToggle(''); return; } // reinstating — no reason needed
+    setShowReasonPicker(true);
+    setSelectedReason('');
+  };
+
+  const handleConfirmCancel = () => {
+    if (!selectedReason) return;
+    setShowReasonPicker(false);
+    onToggle(selectedReason);
+  };
+
   return (
     <div className={`rounded-2xl border p-4 transition-all duration-300 shadow-lg
-      ${s.card} ${!locked ? 'hover:-translate-y-0.5 hover:shadow-xl cursor-pointer' : 'cursor-not-allowed'}`}>
+      ${s.card} ${!locked ? 'hover:-translate-y-0.5 hover:shadow-xl' : 'cursor-not-allowed'}`}>
       {/* Top row */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2.5">
@@ -211,23 +231,53 @@ const MealToggleCard = ({ mealType, cancelled, locked, menuItems, onToggle, load
         </p>
       )}
 
+      {/* Reason picker — shown when about to cancel */}
+      {showReasonPicker && !cancelled && (
+        <div className="mb-3 p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 animate-fade-in">
+          <p className="text-xs font-bold text-slate-300 uppercase tracking-widest mb-2">Why are you cancelling?</p>
+          {CANCEL_REASONS.map((reason, i) => (
+            <button key={i} onClick={() => setSelectedReason(reason)}
+              className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold border transition-all
+                ${selectedReason === reason
+                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                  : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10 hover:text-white'}`}>
+              {i + 1}. {reason}
+            </button>
+          ))}
+          <div className="flex gap-2 pt-1">
+            <button onClick={handleConfirmCancel} disabled={!selectedReason}
+              className="flex-1 py-2 bg-gradient-to-r from-rose-500 to-pink-600 text-white rounded-xl text-xs font-black
+                         disabled:opacity-40 hover:brightness-110 transition-all active:scale-95">
+              ✓ Confirm Cancel
+            </button>
+            <button onClick={() => setShowReasonPicker(false)}
+              className="px-4 py-2 bg-white/5 border border-white/10 text-slate-400 rounded-xl text-xs font-bold
+                         hover:bg-white/10 hover:text-white transition-all">
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Toggle button */}
-      <button
-        onClick={onToggle}
-        disabled={locked || loading}
-        className={`w-full py-2.5 rounded-xl text-white text-sm font-black transition-all duration-200 active:scale-95
-          ${locked    ? 'bg-white/5 text-slate-600 cursor-not-allowed border border-white/5' :
-            loading   ? 'bg-white/10 cursor-wait' :
-            cancelled ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-500/20' :
-                        'bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 shadow-lg shadow-rose-500/20'
-          }`}
-      >
-        {loading ? <span className="flex items-center justify-center gap-2"><Spinner small /> Updating…</span>
-          : locked    ? 'Deadline passed'
-          : cancelled ? `✅ Reinstate ${cfg.label}`
-          :             `🚫 Cancel ${cfg.label}`
-        }
-      </button>
+      {!showReasonPicker && (
+        <button
+          onClick={handleCancelClick}
+          disabled={locked || loading}
+          className={`w-full py-2.5 rounded-xl text-white text-sm font-black transition-all duration-200 active:scale-95
+            ${locked    ? 'bg-white/5 text-slate-600 cursor-not-allowed border border-white/5' :
+              loading   ? 'bg-white/10 cursor-wait' :
+              cancelled ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-500/20' :
+                          'bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 shadow-lg shadow-rose-500/20'
+            }`}
+        >
+          {loading ? <span className="flex items-center justify-center gap-2"><Spinner small /> Updating…</span>
+            : locked    ? 'Deadline passed'
+            : cancelled ? `✅ Reinstate ${cfg.label}`
+            :             `🚫 Cancel ${cfg.label}`
+          }
+        </button>
+      )}
     </div>
   );
 };
@@ -268,8 +318,71 @@ const useToast = () => {
 
 // =============================================================================
 // ─────────────────────────────────────────────────────────────────────────────
+// STAR RATING WIDGET — anonymous post-meal rating (per student device only)
 // ─────────────────────────────────────────────────────────────────────────────
-// HISTORY TAB — past meals: Ate vs Skipped with cancel time
+const StarRating = ({ mealDate, mealType }) => {
+  // Store submitted ratings in localStorage so we don't re-prompt
+  const storageKey = `rating_${mealDate}_${mealType}`;
+  const saved = parseInt(localStorage.getItem(storageKey) || '0', 10);
+
+  const [selected, setSelected] = useState(saved);
+  const [hovered,  setHovered]  = useState(0);
+  const [submitted, setSubmitted] = useState(saved > 0);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!selected || submitting) return;
+    setSubmitting(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/ratings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meal_date: mealDate, meal_type: mealType, stars: selected }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        localStorage.setItem(storageKey, String(selected));
+        setSubmitted(true);
+      }
+    } catch { /* silent */ }
+    finally { setSubmitting(false); }
+  };
+
+  if (submitted) {
+    return (
+      <div className="flex items-center gap-1.5 mt-2">
+        <span className="text-amber-400 text-xs">{'⭐'.repeat(selected)}</span>
+        <span className="text-slate-500 text-[10px] font-semibold">Rated</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2.5 pt-2 border-t border-white/10">
+      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1.5">Rate this meal</p>
+      <div className="flex items-center gap-1.5">
+        {[1,2,3,4,5].map(s => (
+          <button key={s}
+            onMouseEnter={() => setHovered(s)}
+            onMouseLeave={() => setHovered(0)}
+            onClick={() => setSelected(s)}
+            className={`text-xl transition-all duration-100 ${s <= (hovered || selected) ? 'text-amber-400 scale-110' : 'text-slate-600'}`}>
+            ★
+          </button>
+        ))}
+        {selected > 0 && (
+          <button onClick={handleSubmit} disabled={submitting}
+            className="ml-2 text-[10px] font-black px-2.5 py-1 bg-amber-500/20 border border-amber-500/30 text-amber-300
+                       rounded-full hover:brightness-110 disabled:opacity-50 transition-all active:scale-95">
+            {submitting ? '…' : 'Submit'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTORY TAB — past meals: Ate vs Skipped + star rating for Ate meals
 // ─────────────────────────────────────────────────────────────────────────────
 const HistoryTab = ({ studentId }) => {
   const [history, setHistory] = useState([]);
@@ -304,10 +417,12 @@ const HistoryTab = ({ studentId }) => {
     </div>
   );
 
+  const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
   return (
     <div className="space-y-3 pb-6 relative z-10">
       <p className="text-slate-500 text-[10px] text-center font-bold uppercase tracking-widest mb-4">
-        Last 14 Days · Tap a meal to see details
+        Last 14 Days · Rate your meals ⭐
       </p>
       {history.map(day => (
         <div key={day.date} className="bg-white/5 backdrop-blur-xl rounded-2xl p-4 border border-white/10 hover:bg-white/10 transition-colors">
@@ -323,6 +438,7 @@ const HistoryTab = ({ studentId }) => {
             {MEAL_TYPES.map(mealType => {
               const meal = day.meals[mealType];
               const skipped    = meal?.cancelled === 1;
+              const isPast     = day.date < todayIST;
               const cancelTime = meal?.cancelled_at
                 ? new Date(meal.cancelled_at.replace(' ', 'T') + 'Z').toLocaleTimeString('en-IN', {
                     timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true
@@ -330,25 +446,42 @@ const HistoryTab = ({ studentId }) => {
                 : null;
               return (
                 <div key={mealType}
-                  className={`rounded-xl px-3 py-2.5 flex items-center gap-2.5 text-xs font-bold border transition-all
+                  className={`rounded-xl px-3 py-2.5 border transition-all
                     ${skipped
-                      ? 'bg-rose-500/10 text-rose-300 border-rose-500/20 shadow-inner shadow-rose-500/5'
-                      : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 shadow-inner shadow-emerald-500/5'}`}>
-                  <span className="text-lg">{MEAL_CONFIG[mealType]?.icon}</span>
-                  <div>
-                    <div className="opacity-90">{mealType}</div>
-                    {skipped
-                      ? <div className="text-rose-400/80 font-mono" style={{ fontSize: '0.65rem' }}>
-                          Skipped {cancelTime ? `@ ${cancelTime}` : ''}
-                        </div>
-                      : <div className="text-emerald-400/80" style={{ fontSize: '0.65rem' }}>Ate ✓</div>}
+                      ? 'bg-rose-500/10 text-rose-300 border-rose-500/20'
+                      : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">{MEAL_CONFIG[mealType]?.icon}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold opacity-90 truncate">{mealType}</div>
+                      {skipped
+                        ? <>
+                            <div className="text-rose-400/80 font-mono" style={{ fontSize: '0.65rem' }}>
+                              Skipped {cancelTime ? `@ ${cancelTime}` : ''}
+                            </div>
+                            {meal?.reason && meal.reason.trim() && (
+                              <div className="text-rose-400/60 italic" style={{ fontSize: '0.6rem' }}>
+                                "{meal.reason}"
+                              </div>
+                            )}
+                          </>
+                        : <div className="text-emerald-400/80" style={{ fontSize: '0.65rem' }}>Ate ✓</div>
+                      }
+                    </div>
                   </div>
+                  {/* Show star rating UI for past Ate meals */}
+                  {!skipped && isPast && (
+                    <StarRating mealDate={day.date} mealType={mealType} />
+                  )}
                 </div>
               );
             })}
           </div>
         </div>
       ))}
+      <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-xl p-3 text-xs text-cyan-300 font-semibold text-center">
+        ⭐ Rate your past meals — all ratings are 100% anonymous!
+      </div>
     </div>
   );
 };
@@ -485,14 +618,14 @@ const TodayTab = ({ studentId, showToast }) => {
     return istMinutes >= MEAL_CONFIG[mealType].deadline;
   };
 
-  const handleToggle = async (mealType) => {
+  const handleToggle = async (mealType, reason = '') => {
     if (!studentId) { showToast('No student linked to this account', 'info'); return; }
     if (isMealLocked(mealType)) return;
     setLoadingMeal(mealType);
     try {
       const r = await fetch(`${API_BASE}/cancel-meal`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: studentId, date: selectedDate, meal_type: mealType }),
+        body: JSON.stringify({ student_id: studentId, date: selectedDate, meal_type: mealType, reason }),
       });
       const d = await r.json();
       if (d.success) {
@@ -561,7 +694,7 @@ const TodayTab = ({ studentId, showToast }) => {
           {MEAL_TYPES.map(mealType => (
             <MealToggleCard key={mealType} mealType={mealType} cancelled={statuses[mealType]}
               locked={isMealLocked(mealType)} menuItems={menu[mealType]}
-              onToggle={() => handleToggle(mealType)} loading={loadingMeal === mealType} />
+              onToggle={(reason) => handleToggle(mealType, reason)} loading={loadingMeal === mealType} />
           ))}
         </div>
       )}
