@@ -1,15 +1,10 @@
 // =============================================================================
-// FILE: server.js  —  Node.js / Express + Socket.io Backend  (v5)
+// FILE: server.js  —  Node.js / Express + Socket.io Backend  (v6)
 // =============================================================================
-// WHAT'S NEW IN v5:
-//   • Removed ALL ML/AI integrations (no more axios calls to port 8000)
-//   • Daily_Meals gets a new `reason` TEXT column for cancellation reasons
-//   • New Ratings table: anonymous 5-star post-meal ratings
-//   • POST /api/ratings  — submit a star rating (anonymous)
-//   • GET  /api/ratings  — aggregated star breakdown per meal_date + meal_type
-//   • /cancel-meal now accepts an optional `reason` field
-//   • /audit-cancellations now returns the `reason` column
-//   • /dashboard now returns simple manual-analytics data (no ML)
+// WHAT'S NEW IN v6:
+//   • Fixed plate calculation (no double counting of online-ordered meals)
+//   • Inventory table + CRUD endpoints (Store Room)
+//   • Workers table + Attendance table + endpoints (Staff Management)
 // =============================================================================
 
 const express    = require('express');
@@ -19,41 +14,21 @@ const sqlite3    = require('sqlite3').verbose();
 const cors       = require('cors');
 const path       = require('path');
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────────────────────
-const PORT         = 3001;
-const MEAL_TYPES   = ['Breakfast', 'Lunch', 'Snacks', 'Dinner'];
-const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const HOSTELS      = ['Chitrakot', 'Mainpat', 'Sirpur', 'Mahanadi', 'Indravati', 'Malhar', 'Kotumsar', 'Seonath'];
+const PORT           = 3001;
+const TOTAL_ENROLLED = 500;
+const MEAL_TYPES     = ['Breakfast', 'Lunch', 'Snacks', 'Dinner'];
+const DAYS_OF_WEEK   = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const HOSTELS        = ['Chitrakot', 'Mainpat', 'Sirpur', 'Mahanadi', 'Indravati', 'Malhar', 'Kotumsar', 'Seonath'];
 
-const CANCEL_REASONS = [
-  'Ordered online',
-  "Don't like this meal",
-  'Other reasons',
-];
-
-// ─────────────────────────────────────────────────────────────────────────────
-// IN-MEMORY HOSTEL DELIVERY COUNTS
-// ─────────────────────────────────────────────────────────────────────────────
 const hostelCounts = HOSTELS.reduce((acc, h) => ({ ...acc, [h]: 0 }), {});
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EXPRESS APP + HTTP SERVER + SOCKET.IO
-// ─────────────────────────────────────────────────────────────────────────────
 const app    = express();
 const server = http.createServer(app);
-
-const io = new Server(server, {
-  cors: { origin: 'http://localhost:3000', methods: ['GET', 'POST'] }
-});
+const io     = new Server(server, { cors: { origin: 'http://localhost:3000', methods: ['GET', 'POST'] } });
 
 app.use(cors({ origin: 'http://localhost:3000', methods: ['GET', 'POST', 'PUT', 'DELETE'] }));
 app.use(express.json());
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DATABASE SETUP
-// ─────────────────────────────────────────────────────────────────────────────
 const DB_PATH = path.join(__dirname, 'mess.db');
 const db = new sqlite3.Database(DB_PATH, (err) => {
   if (err) { console.error('❌ DB open failed:', err.message); process.exit(1); }
@@ -62,9 +37,6 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 db.run('PRAGMA journal_mode = WAL');
 db.run('PRAGMA foreign_keys = ON');
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PROMISE WRAPPERS
-// ─────────────────────────────────────────────────────────────────────────────
 const runAsync = (sql, p = []) => new Promise((res, rej) =>
   db.run(sql, p, function(e) { e ? rej(e) : res(this); })
 );
@@ -75,9 +47,6 @@ const allAsync = (sql, p = []) => new Promise((res, rej) =>
   db.all(sql, p, (e, rows) => e ? rej(e) : res(rows))
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
 const getTodayIST = () =>
   new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
@@ -101,120 +70,121 @@ const countToTrafficLevel = (count) => {
   return 'Low';
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // DATABASE INITIALISATION
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 (async () => {
   try {
-    // ── Students ───────────────────────────────────────────────────────────
-    await runAsync(`
-      CREATE TABLE IF NOT EXISTS Students (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        name        TEXT    NOT NULL,
-        roll_number TEXT    UNIQUE NOT NULL
-      )
-    `);
+    await runAsync(`CREATE TABLE IF NOT EXISTS Students (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT    NOT NULL,
+      roll_number TEXT    UNIQUE NOT NULL
+    )`);
 
-    // ── Users (role-based auth) ─────────────────────────────────────────────
-    await runAsync(`
-      CREATE TABLE IF NOT EXISTS Users (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        name        TEXT    NOT NULL,
-        mobile_no   TEXT    NOT NULL,
-        password    TEXT    NOT NULL,
-        role        TEXT    NOT NULL CHECK(role IN ('student','contractor','guard')),
-        hostel_name TEXT    NOT NULL DEFAULT ''
-      )
-    `);
+    await runAsync(`CREATE TABLE IF NOT EXISTS Users (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT    NOT NULL,
+      mobile_no   TEXT    NOT NULL,
+      password    TEXT    NOT NULL,
+      role        TEXT    NOT NULL CHECK(role IN ('student','contractor','guard')),
+      hostel_name TEXT    NOT NULL DEFAULT ''
+    )`);
 
-    // ── Migration: add hostel_name if missing ───────────────────────────────
     try {
       await runAsync(`ALTER TABLE Users ADD COLUMN hostel_name TEXT NOT NULL DEFAULT ''`);
       console.log('🔄 Migration: added hostel_name column to Users');
     } catch { /* already exists */ }
 
-    // ── Daily_Meals (with reason column) ───────────────────────────────────
     const colCheck    = await allAsync(`PRAGMA table_info(Daily_Meals)`);
     const hasMealType = colCheck.some(c => c.name === 'meal_type');
-    if (!hasMealType && colCheck.length > 0) {
-      await runAsync(`DROP TABLE IF EXISTS Daily_Meals`);
-    }
-    await runAsync(`
-      CREATE TABLE IF NOT EXISTS Daily_Meals (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        student_id   INTEGER NOT NULL,
-        date         TEXT    NOT NULL,
-        meal_type    TEXT    NOT NULL DEFAULT 'Lunch',
-        cancelled    INTEGER DEFAULT 0,
-        cancelled_at DATETIME,
-        reason       TEXT    DEFAULT '',
-        UNIQUE(student_id, date, meal_type),
-        FOREIGN KEY (student_id) REFERENCES Students(id)
-      )
-    `);
+    if (!hasMealType && colCheck.length > 0) await runAsync(`DROP TABLE IF EXISTS Daily_Meals`);
 
-    // ── Migration: add reason column if missing ─────────────────────────────
+    await runAsync(`CREATE TABLE IF NOT EXISTS Daily_Meals (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id   INTEGER NOT NULL,
+      date         TEXT    NOT NULL,
+      meal_type    TEXT    NOT NULL DEFAULT 'Lunch',
+      cancelled    INTEGER DEFAULT 0,
+      cancelled_at DATETIME,
+      reason       TEXT    DEFAULT '',
+      UNIQUE(student_id, date, meal_type),
+      FOREIGN KEY (student_id) REFERENCES Students(id)
+    )`);
+
     try {
       await runAsync(`ALTER TABLE Daily_Meals ADD COLUMN reason TEXT DEFAULT ''`);
       console.log('🔄 Migration: added reason column to Daily_Meals');
     } catch { /* already exists */ }
 
-    // ── Weekly_Menu ────────────────────────────────────────────────────────
-    await runAsync(`
-      CREATE TABLE IF NOT EXISTS Weekly_Menu (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        day_of_week TEXT    NOT NULL,
-        meal_type   TEXT    NOT NULL,
-        items       TEXT    NOT NULL DEFAULT '',
-        UNIQUE(day_of_week, meal_type)
-      )
-    `);
+    await runAsync(`CREATE TABLE IF NOT EXISTS Weekly_Menu (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      day_of_week TEXT    NOT NULL,
+      meal_type   TEXT    NOT NULL,
+      items       TEXT    NOT NULL DEFAULT '',
+      UNIQUE(day_of_week, meal_type)
+    )`);
 
-    // ── Leaves ─────────────────────────────────────────────────────────────
-    await runAsync(`
-      CREATE TABLE IF NOT EXISTS Leaves (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        student_id INTEGER NOT NULL,
-        start_date TEXT    NOT NULL,
-        end_date   TEXT    NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (student_id) REFERENCES Students(id)
-      )
-    `);
+    await runAsync(`CREATE TABLE IF NOT EXISTS Leaves (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL,
+      start_date TEXT    NOT NULL,
+      end_date   TEXT    NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (student_id) REFERENCES Students(id)
+    )`);
 
-    // ── Hostel_Deliveries ──────────────────────────────────────────────────
-    await runAsync(`
-      CREATE TABLE IF NOT EXISTS Hostel_Deliveries (
-        id     INTEGER PRIMARY KEY AUTOINCREMENT,
-        date   TEXT    NOT NULL,
-        hostel TEXT    NOT NULL,
-        count  INTEGER NOT NULL DEFAULT 0,
-        UNIQUE(date, hostel)
-      )
-    `);
+    await runAsync(`CREATE TABLE IF NOT EXISTS Hostel_Deliveries (
+      id     INTEGER PRIMARY KEY AUTOINCREMENT,
+      date   TEXT    NOT NULL,
+      hostel TEXT    NOT NULL,
+      count  INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(date, hostel)
+    )`);
 
-    // ── Delivery_Logs ──────────────────────────────────────────────────────
-    await runAsync(`
-      CREATE TABLE IF NOT EXISTS Delivery_Logs (
-        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-        hostel               TEXT    NOT NULL,
-        delivery_person_name TEXT    NOT NULL,
-        mobile_no            TEXT    NOT NULL,
-        in_time              TEXT    NOT NULL,
-        date                 TEXT    NOT NULL
-      )
-    `);
+    await runAsync(`CREATE TABLE IF NOT EXISTS Delivery_Logs (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      hostel               TEXT    NOT NULL,
+      delivery_person_name TEXT    NOT NULL,
+      mobile_no            TEXT    NOT NULL,
+      in_time              TEXT    NOT NULL,
+      date                 TEXT    NOT NULL
+    )`);
 
-    // ── Ratings (anonymous post-meal ratings) ──────────────────────────────
-    await runAsync(`
-      CREATE TABLE IF NOT EXISTS Ratings (
-        id        INTEGER PRIMARY KEY AUTOINCREMENT,
-        meal_date TEXT    NOT NULL,
-        meal_type TEXT    NOT NULL,
-        stars     INTEGER NOT NULL CHECK(stars BETWEEN 1 AND 5),
-        rated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    await runAsync(`CREATE TABLE IF NOT EXISTS Ratings (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      meal_date TEXT    NOT NULL,
+      meal_type TEXT    NOT NULL,
+      stars     INTEGER NOT NULL CHECK(stars BETWEEN 1 AND 5),
+      rated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // ── NEW v6: Inventory (Store Room) ──────────────────────────────────────
+    await runAsync(`CREATE TABLE IF NOT EXISTS Inventory (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_name   TEXT    NOT NULL,
+      date_bought TEXT    NOT NULL,
+      quantity    INTEGER NOT NULL DEFAULT 0,
+      created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // ── NEW v6: Workers (Mess Staff) ────────────────────────────────────────
+    await runAsync(`CREATE TABLE IF NOT EXISTS Workers (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT    NOT NULL,
+      role        TEXT    NOT NULL DEFAULT 'Cook',
+      leave_until TEXT    DEFAULT NULL,
+      created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // ── NEW v6: Attendance ──────────────────────────────────────────────────
+    await runAsync(`CREATE TABLE IF NOT EXISTS Attendance (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      worker_id INTEGER NOT NULL,
+      date      TEXT    NOT NULL,
+      status    TEXT    NOT NULL CHECK(status IN ('Present','Absent','On Leave')),
+      UNIQUE(worker_id, date),
+      FOREIGN KEY (worker_id) REFERENCES Workers(id)
+    )`);
 
     // ── SEED: 500 Students ─────────────────────────────────────────────────
     const { count: sc } = await getAsync('SELECT COUNT(*) as count FROM Students');
@@ -251,7 +221,6 @@ const countToTrafficLevel = (count) => {
       console.log('✅ Mock users seeded!');
     }
 
-    // ── Ensure student users have matching Students table entries ──────────
     const studentUsers = await allAsync("SELECT name FROM Users WHERE role = 'student'");
     for (const u of studentUsers) {
       const existing = await getAsync('SELECT id FROM Students WHERE LOWER(name) = LOWER(?)', [u.name]);
@@ -265,15 +234,14 @@ const countToTrafficLevel = (count) => {
     // ── SEED: Weekly Menu ──────────────────────────────────────────────────
     const { count: mc } = await getAsync('SELECT COUNT(*) as count FROM Weekly_Menu');
     if (mc === 0) {
-      console.log('🌱 Seeding default weekly menu…');
       const defaultMenu = {
-        Monday:    { Breakfast: 'Idli, Sambar, Coconut Chutney, Banana',        Lunch: 'Dal Tadka, Jeera Rice, Phulka, Mixed Veg, Salad',     Snacks: 'Bread Pakora, Masala Chai',          Dinner: 'Paneer Butter Masala, Butter Naan, Rice, Raita'     },
-        Tuesday:   { Breakfast: 'Poha, Boiled Eggs, Tea, Fruit',                Lunch: 'Rajma Chawal, Roti, Boondi Raita, Pickle',            Snacks: 'Vada Pav, Ginger Tea',               Dinner: 'Dal Makhani, Tawa Roti, Jeera Rice, Papad'          },
-        Wednesday: { Breakfast: 'Upma, Peanut Chutney, Coffee, Orange',         Lunch: 'Chhole, Bhature, Onion Salad, Lassi',                 Snacks: 'Dhokla, Tamarind Chutney, Tea',      Dinner: 'Mix Veg Curry, Chapati, Rice, Curd'                 },
-        Thursday:  { Breakfast: 'Puri Bhaji, Pickle, Tea',                      Lunch: 'Kadhi Pakora, Rice, Phulka, Papad, Salad',            Snacks: 'Aloo Tikki, Mint Chutney, Tea',      Dinner: 'Butter Chicken / Paneer, Naan, Rice, Gulab Jamun'   },
-        Friday:    { Breakfast: 'Dosa, Coconut Chutney, Sambar, Coffee',        Lunch: 'Pulao, Raita, Soya Curry, Roti, Salad',               Snacks: 'Matar Kulcha, Chai',                 Dinner: 'Dal Fry, Jeera Rice, Roti, Halwa'                   },
-        Saturday:  { Breakfast: 'Aloo Paratha, Butter, Curd, Tea',              Lunch: 'Biryani, Mirchi ka Salan, Raita, Papad',              Snacks: 'Samosa, Chaat, Cold Drink',          Dinner: 'Mutton / Paneer Kofta, Chapati, Rice, Ice Cream'    },
-        Sunday:    { Breakfast: 'Bread Omelette, Cornflakes, Milk, Juice',      Lunch: 'Chole Bhature, Raita, Salad, Lassi',                  Snacks: 'Popcorn, Juice, Biscuits',           Dinner: 'Dal Makhani, Shahi Paneer, Naan, Rice, Kheer'       },
+        Monday:    { Breakfast: 'Idli, Sambar, Coconut Chutney, Banana',        Lunch: 'Dal Tadka, Jeera Rice, Phulka, Mixed Veg, Salad',     Snacks: 'Bread Pakora, Masala Chai',       Dinner: 'Paneer Butter Masala, Butter Naan, Rice, Raita'   },
+        Tuesday:   { Breakfast: 'Poha, Boiled Eggs, Tea, Fruit',                Lunch: 'Rajma Chawal, Roti, Boondi Raita, Pickle',            Snacks: 'Vada Pav, Ginger Tea',            Dinner: 'Dal Makhani, Tawa Roti, Jeera Rice, Papad'        },
+        Wednesday: { Breakfast: 'Upma, Peanut Chutney, Coffee, Orange',         Lunch: 'Chhole, Bhature, Onion Salad, Lassi',                 Snacks: 'Dhokla, Tamarind Chutney, Tea',   Dinner: 'Mix Veg Curry, Chapati, Rice, Curd'               },
+        Thursday:  { Breakfast: 'Puri Bhaji, Pickle, Tea',                      Lunch: 'Kadhi Pakora, Rice, Phulka, Papad, Salad',            Snacks: 'Aloo Tikki, Mint Chutney, Tea',   Dinner: 'Butter Chicken / Paneer, Naan, Rice, Gulab Jamun' },
+        Friday:    { Breakfast: 'Dosa, Coconut Chutney, Sambar, Coffee',        Lunch: 'Pulao, Raita, Soya Curry, Roti, Salad',               Snacks: 'Matar Kulcha, Chai',              Dinner: 'Dal Fry, Jeera Rice, Roti, Halwa'                 },
+        Saturday:  { Breakfast: 'Aloo Paratha, Butter, Curd, Tea',              Lunch: 'Biryani, Mirchi ka Salan, Raita, Papad',              Snacks: 'Samosa, Chaat, Cold Drink',       Dinner: 'Mutton / Paneer Kofta, Chapati, Rice, Ice Cream'  },
+        Sunday:    { Breakfast: 'Bread Omelette, Cornflakes, Milk, Juice',      Lunch: 'Chole Bhature, Raita, Salad, Lassi',                  Snacks: 'Popcorn, Juice, Biscuits',        Dinner: 'Dal Makhani, Shahi Paneer, Naan, Rice, Kheer'     },
       };
       await runAsync('BEGIN TRANSACTION');
       for (const [day, meals] of Object.entries(defaultMenu)) {
@@ -285,11 +253,8 @@ const countToTrafficLevel = (count) => {
       console.log('✅ Weekly menu seeded!');
     }
 
-    // ── LOAD TODAY'S HOSTEL DELIVERY COUNTS ───────────────────────────────
     const today = getTodayIST();
-    const existingCounts = await allAsync(
-      'SELECT hostel, count FROM Hostel_Deliveries WHERE date = ?', [today]
-    );
+    const existingCounts = await allAsync('SELECT hostel, count FROM Hostel_Deliveries WHERE date = ?', [today]);
     for (const row of existingCounts) {
       if (hostelCounts.hasOwnProperty(row.hostel)) hostelCounts[row.hostel] = row.count;
     }
@@ -302,7 +267,7 @@ const countToTrafficLevel = (count) => {
 })();
 
 // =============================================================================
-// SOCKET.IO REAL-TIME LAYER
+// SOCKET.IO
 // =============================================================================
 io.on('connection', (socket) => {
   console.log(`🔌 Client connected: ${socket.id}`);
@@ -311,15 +276,12 @@ io.on('connection', (socket) => {
   socket.on('log_delivery', async ({ hostel }) => {
     if (!HOSTELS.includes(hostel)) { socket.emit('error', { message: `Unknown hostel: ${hostel}` }); return; }
     hostelCounts[hostel] += 1;
-    const newCount = hostelCounts[hostel];
-    const today    = getTodayIST();
+    const today = getTodayIST();
     io.emit('delivery_count_updated', { ...hostelCounts });
     try {
-      await runAsync(`
-        INSERT INTO Hostel_Deliveries (date, hostel, count)
-        VALUES (?, ?, ?)
-        ON CONFLICT(date, hostel) DO UPDATE SET count = excluded.count
-      `, [today, hostel, newCount]);
+      await runAsync(`INSERT INTO Hostel_Deliveries (date, hostel, count) VALUES (?, ?, ?)
+        ON CONFLICT(date, hostel) DO UPDATE SET count = excluded.count`,
+        [today, hostel, hostelCounts[hostel]]);
     } catch (err) { console.error(`❌ Failed to persist delivery count:`, err.message); }
   });
 
@@ -327,12 +289,8 @@ io.on('connection', (socket) => {
 });
 
 // =============================================================================
-// HTTP ROUTES
+// AUTH
 // =============================================================================
-
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/signup
-// ─────────────────────────────────────────────────────────────────────────────
 app.post('/api/signup', async (req, res) => {
   const { name, mobile_no, password, role, hostel_name = '' } = req.body;
   if (!name || !mobile_no || !password || !role)
@@ -360,9 +318,6 @@ app.post('/api/signup', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/login
-// ─────────────────────────────────────────────────────────────────────────────
 app.post('/api/login', async (req, res) => {
   const { name, password, role } = req.body;
   if (!name || !password || !role)
@@ -378,9 +333,6 @@ app.post('/api/login', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/ensure-student
-// ─────────────────────────────────────────────────────────────────────────────
 app.post('/api/ensure-student', async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ success: false, error: 'name is required.' });
@@ -395,10 +347,9 @@ app.post('/api/ensure-student', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/meal-history/:student_id
-// Returns last N days of meal status + reason for a student
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// MEAL HISTORY / LEADERBOARD
+// =============================================================================
 app.get('/api/meal-history/:student_id', async (req, res) => {
   const studentId = parseInt(req.params.student_id, 10);
   const days      = Math.min(parseInt(req.query.days || '14', 10), 90);
@@ -414,8 +365,7 @@ app.get('/api/meal-history/:student_id', async (req, res) => {
     const earliest = dates[dates.length - 1];
     const rows = await allAsync(
       `SELECT date, meal_type, cancelled, cancelled_at, reason
-       FROM Daily_Meals
-       WHERE student_id = ? AND date BETWEEN ? AND ?
+       FROM Daily_Meals WHERE student_id = ? AND date BETWEEN ? AND ?
        ORDER BY date DESC, meal_type`,
       [studentId, earliest, today]
     );
@@ -424,43 +374,35 @@ app.get('/api/meal-history/:student_id', async (req, res) => {
       if (!mealMap[row.date]) mealMap[row.date] = {};
       mealMap[row.date][row.meal_type] = { cancelled: row.cancelled, cancelled_at: row.cancelled_at, reason: row.reason || '' };
     }
-    const history = dates
-      .filter(d => mealMap[d])
-      .map(d => ({
-        date: d,
-        meals: {
-          Breakfast: mealMap[d]['Breakfast'] || { cancelled: 0, cancelled_at: null, reason: '' },
-          Lunch:     mealMap[d]['Lunch']     || { cancelled: 0, cancelled_at: null, reason: '' },
-          Snacks:    mealMap[d]['Snacks']    || { cancelled: 0, cancelled_at: null, reason: '' },
-          Dinner:    mealMap[d]['Dinner']    || { cancelled: 0, cancelled_at: null, reason: '' },
-        }
-      }));
+    const history = dates.filter(d => mealMap[d]).map(d => ({
+      date: d,
+      meals: {
+        Breakfast: mealMap[d]['Breakfast'] || { cancelled: 0, cancelled_at: null, reason: '' },
+        Lunch:     mealMap[d]['Lunch']     || { cancelled: 0, cancelled_at: null, reason: '' },
+        Snacks:    mealMap[d]['Snacks']    || { cancelled: 0, cancelled_at: null, reason: '' },
+        Dinner:    mealMap[d]['Dinner']    || { cancelled: 0, cancelled_at: null, reason: '' },
+      }
+    }));
     res.json({ success: true, student_id: studentId, days, history });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/leaderboard
-// ─────────────────────────────────────────────────────────────────────────────
 app.get('/api/leaderboard', async (req, res) => {
   const month = getTodayIST().substring(0, 7);
   try {
     const rows = await allAsync(`
       SELECT s.name, COUNT(*) AS cancellations
-      FROM Daily_Meals dm
-      JOIN Students s ON s.id = dm.student_id
+      FROM Daily_Meals dm JOIN Students s ON s.id = dm.student_id
       WHERE dm.cancelled = 1 AND dm.date LIKE ?
-      GROUP BY dm.student_id, s.name
-      ORDER BY cancellations DESC
-      LIMIT 15
+      GROUP BY dm.student_id, s.name ORDER BY cancellations DESC LIMIT 15
     `, [`${month}%`]);
     res.json({ success: true, month, leaderboard: rows.map(r => ({ name: r.name, cancellations: r.cancellations, points: r.cancellations * 10 })) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/delivery-logs
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// DELIVERY LOGS
+// =============================================================================
 app.post('/api/delivery-logs', async (req, res) => {
   const { hostel, delivery_person_name, mobile_no, in_time } = req.body;
   if (!hostel || !delivery_person_name || !mobile_no || !in_time)
@@ -476,19 +418,14 @@ app.post('/api/delivery-logs', async (req, res) => {
     hostelCounts[hostel] = (hostelCounts[hostel] || 0) + 1;
     io.emit('delivery_count_updated', { ...hostelCounts });
     try {
-      await runAsync(`
-        INSERT INTO Hostel_Deliveries (date, hostel, count)
-        VALUES (?, ?, ?)
-        ON CONFLICT(date, hostel) DO UPDATE SET count = excluded.count
-      `, [today, hostel, hostelCounts[hostel]]);
+      await runAsync(`INSERT INTO Hostel_Deliveries (date, hostel, count) VALUES (?, ?, ?)
+        ON CONFLICT(date, hostel) DO UPDATE SET count = excluded.count`,
+        [today, hostel, hostelCounts[hostel]]);
     } catch (_) {}
     res.json({ success: true, message: 'Delivery log saved!', id: result.lastID });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/delivery-logs
-// ─────────────────────────────────────────────────────────────────────────────
 app.get('/api/delivery-logs', async (req, res) => {
   const date = req.query.date || getTodayIST();
   try {
@@ -500,10 +437,9 @@ app.get('/api/delivery-logs', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/ratings — Anonymous post-meal star rating
-// Body: { meal_date, meal_type, stars }
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// RATINGS
+// =============================================================================
 app.post('/api/ratings', async (req, res) => {
   const { meal_date, meal_type, stars } = req.body;
   if (!meal_date || !meal_type || !stars)
@@ -514,44 +450,11 @@ app.post('/api/ratings', async (req, res) => {
   if (isNaN(starsInt) || starsInt < 1 || starsInt > 5)
     return res.status(400).json({ success: false, error: 'stars must be between 1 and 5.' });
   try {
-    await runAsync(
-      'INSERT INTO Ratings (meal_date, meal_type, stars) VALUES (?, ?, ?)',
-      [meal_date, meal_type, starsInt]
-    );
+    await runAsync('INSERT INTO Ratings (meal_date, meal_type, stars) VALUES (?, ?, ?)', [meal_date, meal_type, starsInt]);
     res.json({ success: true, message: 'Rating submitted! Thank you.' });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/ratings?meal_date=YYYY-MM-DD&meal_type=Lunch
-// Returns aggregated star breakdown (anonymous — no student info)
-// ─────────────────────────────────────────────────────────────────────────────
-app.get('/api/ratings', async (req, res) => {
-  const { meal_date, meal_type } = req.query;
-  if (!meal_date || !meal_type)
-    return res.status(400).json({ success: false, error: 'meal_date and meal_type are required.' });
-  try {
-    const rows = await allAsync(
-      'SELECT stars, COUNT(*) AS count FROM Ratings WHERE meal_date = ? AND meal_type = ? GROUP BY stars ORDER BY stars DESC',
-      [meal_date, meal_type]
-    );
-    // Build a full breakdown 5→1 with zero-fill
-    const breakdown = [5, 4, 3, 2, 1].map(s => {
-      const found = rows.find(r => r.stars === s);
-      return { stars: s, count: found ? found.count : 0 };
-    });
-    const totalRatings = breakdown.reduce((sum, b) => sum + b.count, 0);
-    const avgStars = totalRatings > 0
-      ? (breakdown.reduce((sum, b) => sum + b.stars * b.count, 0) / totalRatings).toFixed(1)
-      : null;
-    res.json({ success: true, meal_date, meal_type, total_ratings: totalRatings, avg_stars: avgStars, breakdown });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/ratings/all?meal_date=YYYY-MM-DD
-// Returns breakdown for all 4 meal types at once (used by kitchen dashboard)
-// ─────────────────────────────────────────────────────────────────────────────
 app.get('/api/ratings/all', async (req, res) => {
   const { meal_date } = req.query;
   if (!meal_date) return res.status(400).json({ success: false, error: 'meal_date is required.' });
@@ -578,9 +481,128 @@ app.get('/api/ratings/all', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /hostel-deliveries
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// INVENTORY (STORE ROOM)
+// =============================================================================
+app.get('/api/inventory', async (req, res) => {
+  try {
+    const items = await allAsync('SELECT * FROM Inventory ORDER BY created_at DESC');
+    res.json({ success: true, items });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.post('/api/inventory', async (req, res) => {
+  const { item_name, date_bought, quantity } = req.body;
+  if (!item_name || !date_bought || quantity === undefined)
+    return res.status(400).json({ success: false, error: 'item_name, date_bought, and quantity are required.' });
+  const qty = parseInt(quantity, 10);
+  if (isNaN(qty) || qty < 0)
+    return res.status(400).json({ success: false, error: 'quantity must be a non-negative integer.' });
+  try {
+    const result = await runAsync(
+      'INSERT INTO Inventory (item_name, date_bought, quantity) VALUES (?, ?, ?)',
+      [item_name.trim(), date_bought, qty]
+    );
+    const item = await getAsync('SELECT * FROM Inventory WHERE id = ?', [result.lastID]);
+    res.json({ success: true, message: 'Item added!', item });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.put('/api/inventory/:id', async (req, res) => {
+  const { id }      = req.params;
+  const { quantity } = req.body;
+  if (quantity === undefined)
+    return res.status(400).json({ success: false, error: 'quantity is required.' });
+  const qty = parseInt(quantity, 10);
+  if (isNaN(qty) || qty < 0)
+    return res.status(400).json({ success: false, error: 'quantity must be a non-negative integer.' });
+  try {
+    await runAsync('UPDATE Inventory SET quantity = ? WHERE id = ?', [qty, id]);
+    const item = await getAsync('SELECT * FROM Inventory WHERE id = ?', [id]);
+    if (!item) return res.status(404).json({ success: false, error: 'Item not found.' });
+    res.json({ success: true, message: 'Quantity updated!', item });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.delete('/api/inventory/:id', async (req, res) => {
+  try {
+    await runAsync('DELETE FROM Inventory WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Item deleted.' });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// =============================================================================
+// WORKERS & ATTENDANCE
+// =============================================================================
+app.get('/api/workers', async (req, res) => {
+  const today = getTodayIST();
+  try {
+    const workers        = await allAsync('SELECT * FROM Workers ORDER BY created_at ASC');
+    const attendanceRows = await allAsync('SELECT worker_id, status FROM Attendance WHERE date = ?', [today]);
+    const attendanceMap  = {};
+    for (const row of attendanceRows) attendanceMap[row.worker_id] = row.status;
+
+    const enriched = workers.map(w => {
+      const onLeave = w.leave_until && today <= w.leave_until;
+      return { ...w, today_status: onLeave ? 'On Leave' : (attendanceMap[w.id] || null), on_leave: !!onLeave };
+    });
+    res.json({ success: true, workers: enriched });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.post('/api/workers', async (req, res) => {
+  const { name, role = 'Cook' } = req.body;
+  if (!name) return res.status(400).json({ success: false, error: 'name is required.' });
+  try {
+    const result = await runAsync('INSERT INTO Workers (name, role) VALUES (?, ?)', [name.trim(), role.trim()]);
+    const worker = await getAsync('SELECT * FROM Workers WHERE id = ?', [result.lastID]);
+    res.json({ success: true, message: 'Worker added!', worker });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.post('/api/workers/:id/attendance', async (req, res) => {
+  const { id }     = req.params;
+  const { status } = req.body;
+  if (!['Present', 'Absent', 'On Leave'].includes(status))
+    return res.status(400).json({ success: false, error: 'status must be Present, Absent, or On Leave.' });
+  const today = getTodayIST();
+  try {
+    await runAsync(`INSERT INTO Attendance (worker_id, date, status) VALUES (?, ?, ?)
+      ON CONFLICT(worker_id, date) DO UPDATE SET status = excluded.status`,
+      [id, today, status]);
+    res.json({ success: true, message: `Attendance marked: ${status}` });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.put('/api/workers/:id/leave', async (req, res) => {
+  const { id }          = req.params;
+  const { leave_until } = req.body;
+  try {
+    await runAsync('UPDATE Workers SET leave_until = ? WHERE id = ?', [leave_until || null, id]);
+    if (leave_until) {
+      const today = getTodayIST();
+      const dates = getDatesInRange(today, leave_until);
+      for (const date of dates) {
+        await runAsync(`INSERT INTO Attendance (worker_id, date, status) VALUES (?, ?, 'On Leave')
+          ON CONFLICT(worker_id, date) DO UPDATE SET status = 'On Leave'`, [id, date]);
+      }
+    }
+    const worker = await getAsync('SELECT * FROM Workers WHERE id = ?', [id]);
+    res.json({ success: true, message: 'Leave updated!', worker });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.delete('/api/workers/:id', async (req, res) => {
+  try {
+    await runAsync('DELETE FROM Attendance WHERE worker_id = ?', [req.params.id]);
+    await runAsync('DELETE FROM Workers WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Worker removed.' });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// =============================================================================
+// GENERAL ROUTES
+// =============================================================================
 app.get('/hostel-deliveries', async (req, res) => {
   const date = req.query.date || getTodayIST();
   if (date === getTodayIST()) return res.json({ success: true, date, counts: { ...hostelCounts } });
@@ -601,9 +623,6 @@ app.get('/students', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /meal-status/:student_id/:date
-// ─────────────────────────────────────────────────────────────────────────────
 app.get('/meal-status/:student_id/:date', async (req, res) => {
   const studentId = parseInt(req.params.student_id, 10);
   const date      = req.params.date;
@@ -618,17 +637,12 @@ app.get('/meal-status/:student_id/:date', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /cancel-meal — Now accepts optional `reason` field
-// Body: { student_id, date, meal_type, reason? }
-// ─────────────────────────────────────────────────────────────────────────────
 app.post('/cancel-meal', async (req, res) => {
   const { student_id, date, meal_type, reason = '' } = req.body;
   if (!student_id || !date || !meal_type)
     return res.status(400).json({ success: false, error: 'student_id, date, and meal_type are required.' });
   if (!MEAL_TYPES.includes(meal_type))
     return res.status(400).json({ success: false, error: 'Invalid meal_type.' });
-
   try {
     const existing = await getAsync(
       'SELECT id, cancelled FROM Daily_Meals WHERE student_id = ? AND date = ? AND meal_type = ?',
@@ -656,9 +670,6 @@ app.post('/cancel-meal', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /menu/:date and /menu-week
-// ─────────────────────────────────────────────────────────────────────────────
 app.get('/menu/:date', async (req, res) => {
   const dateStr = req.params.date;
   const dayName = getDayName(dateStr);
@@ -680,9 +691,6 @@ app.get('/menu-week', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PUT /menu
-// ─────────────────────────────────────────────────────────────────────────────
 app.put('/menu', async (req, res) => {
   const menuData = req.body;
   if (!menuData || typeof menuData !== 'object')
@@ -704,9 +712,6 @@ app.put('/menu', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /apply-leave
-// ─────────────────────────────────────────────────────────────────────────────
 app.post('/apply-leave', async (req, res) => {
   const { student_id, start_date, end_date } = req.body;
   if (!student_id || !start_date || !end_date)
@@ -737,9 +742,6 @@ app.post('/apply-leave', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /audit-cancellations — now includes `reason` column
-// ─────────────────────────────────────────────────────────────────────────────
 app.get('/audit-cancellations', async (req, res) => {
   const date  = req.query.date || getTodayIST();
   const month = date.substring(0, 7);
@@ -763,37 +765,60 @@ app.get('/audit-cancellations', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /dashboard — Manual analytics only (no ML)
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// DASHBOARD — Fixed plate calculation (no double-counting)
+//
+// Formula:
+//   ordered_online_count = cancellations with reason "Ordered online" (this meal)
+//   guard_deliveries     = total entries in Delivery_Logs today
+//   extra_deductions     = MAX(0, guard_deliveries - ordered_online_count)
+//   plates_to_prepare    = TOTAL_ENROLLED - meal_cancellations - extra_deductions
+//
+// Rationale: Students who "Ordered online" are already subtracted via cancellations.
+// Guard deliveries that EXCEED that count represent NEW absentees not yet captured.
+// =============================================================================
 app.get('/dashboard', async (req, res) => {
-  const today        = getTodayIST();
-  const TOTAL_ENROLLED = 500;
-  const meal_type    = req.query.meal_type || 'Lunch';
-  const hostel       = req.query.hostel;
+  const today     = getTodayIST();
+  const meal_type = req.query.meal_type || 'Lunch';
+  const hostel    = req.query.hostel;
 
   if (!MEAL_TYPES.includes(meal_type))
     return res.status(400).json({ success: false, error: 'Invalid meal_type.' });
 
   try {
     const { count: mealCancellations } = await getAsync(
-      'SELECT COUNT(*) as count FROM Daily_Meals WHERE date = ? AND meal_type = ? AND cancelled = 1', [today, meal_type]
-    );
-    const { count: totalCancellations } = await getAsync(
-      'SELECT COUNT(*) as count FROM Daily_Meals WHERE date = ? AND cancelled = 1', [today]
-    );
-
-    // Reason breakdown for this meal today
-    const reasonRows = await allAsync(
-      `SELECT COALESCE(reason, 'Not specified') AS reason, COUNT(*) AS count
-       FROM Daily_Meals
-       WHERE date = ? AND meal_type = ? AND cancelled = 1
-       GROUP BY reason
-       ORDER BY count DESC`,
+      `SELECT COUNT(*) as count FROM Daily_Meals WHERE date = ? AND meal_type = ? AND cancelled = 1`,
       [today, meal_type]
     );
 
-    // Hostel live count
+    const { count: orderedOnlineCount } = await getAsync(
+      `SELECT COUNT(*) as count FROM Daily_Meals
+       WHERE date = ? AND meal_type = ? AND cancelled = 1 AND LOWER(reason) = 'ordered online'`,
+      [today, meal_type]
+    );
+
+    const { count: totalCancellations } = await getAsync(
+      `SELECT COUNT(*) as count FROM Daily_Meals WHERE date = ? AND cancelled = 1`,
+      [today]
+    );
+
+    const { count: guardDeliveries } = await getAsync(
+      `SELECT COUNT(*) as count FROM Delivery_Logs WHERE date = ?`,
+      [today]
+    );
+
+    // The key fix: guard deliveries already covered by "Ordered online" cancellations
+    // must NOT be subtracted again.
+    const extraDeductions = Math.max(0, guardDeliveries - orderedOnlineCount);
+    const platesToPrepare = Math.max(0, TOTAL_ENROLLED - mealCancellations - extraDeductions);
+
+    const reasonRows = await allAsync(
+      `SELECT COALESCE(reason, 'Not specified') AS reason, COUNT(*) AS count
+       FROM Daily_Meals WHERE date = ? AND meal_type = ? AND cancelled = 1
+       GROUP BY reason ORDER BY count DESC`,
+      [today, meal_type]
+    );
+
     const liveCount    = hostel && HOSTELS.includes(hostel) ? hostelCounts[hostel] : 0;
     const trafficLevel = hostel ? countToTrafficLevel(liveCount) : 'N/A';
 
@@ -801,8 +826,12 @@ app.get('/dashboard', async (req, res) => {
       success: true, date: today, meal_type,
       total_enrolled:       TOTAL_ENROLLED,
       meal_cancellations:   mealCancellations,
+      ordered_online_count: orderedOnlineCount,
       total_cancellations:  totalCancellations,
-      expected_attendance:  TOTAL_ENROLLED - mealCancellations,
+      guard_deliveries:     guardDeliveries,
+      extra_deductions:     extraDeductions,
+      plates_to_prepare:    platesToPrepare,
+      expected_attendance:  Math.max(0, TOTAL_ENROLLED - mealCancellations),
       reason_breakdown:     reasonRows,
       hostel:               hostel || null,
       live_delivery_count:  liveCount,
@@ -816,7 +845,7 @@ app.get('/dashboard', async (req, res) => {
 // =============================================================================
 server.listen(PORT, () => {
   console.log('\n' + '='.repeat(62));
-  console.log('🚀  Mess Forecasting Backend v5 (No-ML, Data Collection Mode)');
+  console.log('🚀  Mess Forecasting Backend v6 (Inventory + Staff + Fixed Plates)');
   console.log(`📡  HTTP  → http://localhost:${PORT}`);
   console.log(`🔌  WS    → ws://localhost:${PORT}`);
   console.log('='.repeat(62) + '\n');
