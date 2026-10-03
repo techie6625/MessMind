@@ -1,10 +1,10 @@
 // =============================================================================
-// FILE: server.js  —  Node.js / Express + Socket.io Backend  (v6)
+// FILE: server.js  —  Node.js / Express + Socket.io Backend  (v7)
 // =============================================================================
-// WHAT'S NEW IN v6:
-//   • Fixed plate calculation (no double counting of online-ordered meals)
-//   • Inventory table + CRUD endpoints (Store Room)
-//   • Workers table + Attendance table + endpoints (Staff Management)
+// NEW IN v7:
+//   • Purchases table + CRUD (bill tracking with base64 images)
+//   • Waste_Logs table + CRUD (food waste tracking per meal)
+//   • GET /api/warden-stats — aggregated analytics for the Warden portal
 // =============================================================================
 
 const express    = require('express');
@@ -27,7 +27,7 @@ const server = http.createServer(app);
 const io     = new Server(server, { cors: { origin: 'http://localhost:3000', methods: ['GET', 'POST'] } });
 
 app.use(cors({ origin: 'http://localhost:3000', methods: ['GET', 'POST', 'PUT', 'DELETE'] }));
-app.use(express.json());
+app.use(express.json({ limit: '20mb' })); // allow large base64 images
 
 const DB_PATH = path.join(__dirname, 'mess.db');
 const db = new sqlite3.Database(DB_PATH, (err) => {
@@ -86,14 +86,11 @@ const countToTrafficLevel = (count) => {
       name        TEXT    NOT NULL,
       mobile_no   TEXT    NOT NULL,
       password    TEXT    NOT NULL,
-      role        TEXT    NOT NULL CHECK(role IN ('student','contractor','guard')),
+      role        TEXT    NOT NULL CHECK(role IN ('student','contractor','guard','warden')),
       hostel_name TEXT    NOT NULL DEFAULT ''
     )`);
 
-    try {
-      await runAsync(`ALTER TABLE Users ADD COLUMN hostel_name TEXT NOT NULL DEFAULT ''`);
-      console.log('🔄 Migration: added hostel_name column to Users');
-    } catch { /* already exists */ }
+    try { await runAsync(`ALTER TABLE Users ADD COLUMN hostel_name TEXT NOT NULL DEFAULT ''`); } catch {}
 
     const colCheck    = await allAsync(`PRAGMA table_info(Daily_Meals)`);
     const hasMealType = colCheck.some(c => c.name === 'meal_type');
@@ -111,10 +108,7 @@ const countToTrafficLevel = (count) => {
       FOREIGN KEY (student_id) REFERENCES Students(id)
     )`);
 
-    try {
-      await runAsync(`ALTER TABLE Daily_Meals ADD COLUMN reason TEXT DEFAULT ''`);
-      console.log('🔄 Migration: added reason column to Daily_Meals');
-    } catch { /* already exists */ }
+    try { await runAsync(`ALTER TABLE Daily_Meals ADD COLUMN reason TEXT DEFAULT ''`); } catch {}
 
     await runAsync(`CREATE TABLE IF NOT EXISTS Weekly_Menu (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,7 +152,6 @@ const countToTrafficLevel = (count) => {
       rated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
-    // ── NEW v6: Inventory (Store Room) ──────────────────────────────────────
     await runAsync(`CREATE TABLE IF NOT EXISTS Inventory (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       item_name   TEXT    NOT NULL,
@@ -167,7 +160,6 @@ const countToTrafficLevel = (count) => {
       created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
-    // ── NEW v6: Workers (Mess Staff) ────────────────────────────────────────
     await runAsync(`CREATE TABLE IF NOT EXISTS Workers (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       name        TEXT    NOT NULL,
@@ -176,7 +168,6 @@ const countToTrafficLevel = (count) => {
       created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
-    // ── NEW v6: Attendance ──────────────────────────────────────────────────
     await runAsync(`CREATE TABLE IF NOT EXISTS Attendance (
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
       worker_id INTEGER NOT NULL,
@@ -184,6 +175,26 @@ const countToTrafficLevel = (count) => {
       status    TEXT    NOT NULL CHECK(status IN ('Present','Absent','On Leave')),
       UNIQUE(worker_id, date),
       FOREIGN KEY (worker_id) REFERENCES Workers(id)
+    )`);
+
+    // ── NEW v7: Purchases (financial tracking with base64 receipt image) ──
+    await runAsync(`CREATE TABLE IF NOT EXISTS Purchases (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      date          TEXT    NOT NULL,
+      amount        REAL    NOT NULL,
+      description   TEXT    NOT NULL DEFAULT '',
+      receipt_image TEXT    DEFAULT NULL,
+      created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // ── NEW v7: Waste_Logs (food waste per meal) ───────────────────────────
+    await runAsync(`CREATE TABLE IF NOT EXISTS Waste_Logs (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      date       TEXT    NOT NULL,
+      meal_type  TEXT    NOT NULL,
+      weight_kg  REAL    NOT NULL,
+      notes      TEXT    DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
     // ── SEED: 500 Students ─────────────────────────────────────────────────
@@ -199,16 +210,15 @@ const countToTrafficLevel = (count) => {
       console.log('✅ 500 students seeded!');
     }
 
-    // ── SEED: Mock Users ───────────────────────────────────────────────────
     const { count: uc } = await getAsync('SELECT COUNT(*) as count FROM Users');
     if (uc === 0) {
-      console.log('🌱 Seeding mock users…');
       const mockUsers = [
         { name: 'Navodit',         mobile_no: '9876543210', password: 'student123',    role: 'student',    hostel_name: 'Chitrakot' },
         { name: 'Rahul Sharma',    mobile_no: '9876543211', password: 'student456',    role: 'student',    hostel_name: 'Mainpat'   },
         { name: 'Priya Verma',     mobile_no: '9876543214', password: 'student789',    role: 'student',    hostel_name: 'Sirpur'    },
         { name: 'Mess Contractor', mobile_no: '9876543212', password: 'contractor123', role: 'contractor', hostel_name: 'Chitrakot' },
         { name: 'Gate Guard',      mobile_no: '9876543213', password: 'guard123',      role: 'guard',      hostel_name: ''          },
+        { name: 'admin',           mobile_no: '9999999999', password: 'admin123',      role: 'warden',     hostel_name: ''          },
       ];
       await runAsync('BEGIN TRANSACTION');
       for (const u of mockUsers) {
@@ -218,7 +228,16 @@ const countToTrafficLevel = (count) => {
         );
       }
       await runAsync('COMMIT');
-      console.log('✅ Mock users seeded!');
+      console.log('✅ Mock users seeded (incl. warden: admin/admin123)!');
+    } else {
+      // Ensure warden user exists even after upgrade
+      const warden = await getAsync("SELECT id FROM Users WHERE role='warden' LIMIT 1");
+      if (!warden) {
+        await runAsync(
+          "INSERT OR IGNORE INTO Users (name, mobile_no, password, role, hostel_name) VALUES ('admin','9999999999','admin123','warden','')"
+        );
+        console.log('🔄 Warden account added.');
+      }
     }
 
     const studentUsers = await allAsync("SELECT name FROM Users WHERE role = 'student'");
@@ -227,21 +246,19 @@ const countToTrafficLevel = (count) => {
       if (!existing) {
         const roll = 'U' + u.name.replace(/\s+/g, '').toUpperCase().substring(0, 8);
         await runAsync('INSERT OR IGNORE INTO Students (name, roll_number) VALUES (?, ?)', [u.name, roll]);
-        console.log(`  ↳ Created Students entry for: ${u.name} (${roll})`);
       }
     }
 
-    // ── SEED: Weekly Menu ──────────────────────────────────────────────────
     const { count: mc } = await getAsync('SELECT COUNT(*) as count FROM Weekly_Menu');
     if (mc === 0) {
       const defaultMenu = {
-        Monday:    { Breakfast: 'Idli, Sambar, Coconut Chutney, Banana',        Lunch: 'Dal Tadka, Jeera Rice, Phulka, Mixed Veg, Salad',     Snacks: 'Bread Pakora, Masala Chai',       Dinner: 'Paneer Butter Masala, Butter Naan, Rice, Raita'   },
-        Tuesday:   { Breakfast: 'Poha, Boiled Eggs, Tea, Fruit',                Lunch: 'Rajma Chawal, Roti, Boondi Raita, Pickle',            Snacks: 'Vada Pav, Ginger Tea',            Dinner: 'Dal Makhani, Tawa Roti, Jeera Rice, Papad'        },
-        Wednesday: { Breakfast: 'Upma, Peanut Chutney, Coffee, Orange',         Lunch: 'Chhole, Bhature, Onion Salad, Lassi',                 Snacks: 'Dhokla, Tamarind Chutney, Tea',   Dinner: 'Mix Veg Curry, Chapati, Rice, Curd'               },
-        Thursday:  { Breakfast: 'Puri Bhaji, Pickle, Tea',                      Lunch: 'Kadhi Pakora, Rice, Phulka, Papad, Salad',            Snacks: 'Aloo Tikki, Mint Chutney, Tea',   Dinner: 'Butter Chicken / Paneer, Naan, Rice, Gulab Jamun' },
-        Friday:    { Breakfast: 'Dosa, Coconut Chutney, Sambar, Coffee',        Lunch: 'Pulao, Raita, Soya Curry, Roti, Salad',               Snacks: 'Matar Kulcha, Chai',              Dinner: 'Dal Fry, Jeera Rice, Roti, Halwa'                 },
-        Saturday:  { Breakfast: 'Aloo Paratha, Butter, Curd, Tea',              Lunch: 'Biryani, Mirchi ka Salan, Raita, Papad',              Snacks: 'Samosa, Chaat, Cold Drink',       Dinner: 'Mutton / Paneer Kofta, Chapati, Rice, Ice Cream'  },
-        Sunday:    { Breakfast: 'Bread Omelette, Cornflakes, Milk, Juice',      Lunch: 'Chole Bhature, Raita, Salad, Lassi',                  Snacks: 'Popcorn, Juice, Biscuits',        Dinner: 'Dal Makhani, Shahi Paneer, Naan, Rice, Kheer'     },
+        Monday:    { Breakfast: 'Idli, Sambar, Coconut Chutney, Banana',   Lunch: 'Dal Tadka, Jeera Rice, Phulka, Mixed Veg', Snacks: 'Bread Pakora, Masala Chai',    Dinner: 'Paneer Butter Masala, Butter Naan, Rice, Raita' },
+        Tuesday:   { Breakfast: 'Poha, Boiled Eggs, Tea, Fruit',           Lunch: 'Rajma Chawal, Roti, Boondi Raita, Pickle', Snacks: 'Vada Pav, Ginger Tea',         Dinner: 'Dal Makhani, Tawa Roti, Jeera Rice, Papad'     },
+        Wednesday: { Breakfast: 'Upma, Peanut Chutney, Coffee, Orange',    Lunch: 'Chhole, Bhature, Onion Salad, Lassi',      Snacks: 'Dhokla, Tamarind Chutney, Tea', Dinner: 'Mix Veg Curry, Chapati, Rice, Curd'             },
+        Thursday:  { Breakfast: 'Puri Bhaji, Pickle, Tea',                 Lunch: 'Kadhi Pakora, Rice, Phulka, Papad',        Snacks: 'Aloo Tikki, Mint Chutney, Tea', Dinner: 'Butter Paneer, Naan, Rice, Gulab Jamun'         },
+        Friday:    { Breakfast: 'Dosa, Coconut Chutney, Sambar, Coffee',   Lunch: 'Pulao, Raita, Soya Curry, Roti',           Snacks: 'Matar Kulcha, Chai',            Dinner: 'Dal Fry, Jeera Rice, Roti, Halwa'               },
+        Saturday:  { Breakfast: 'Aloo Paratha, Butter, Curd, Tea',         Lunch: 'Biryani, Mirchi ka Salan, Raita, Papad',   Snacks: 'Samosa, Chaat, Cold Drink',     Dinner: 'Paneer Kofta, Chapati, Rice, Ice Cream'         },
+        Sunday:    { Breakfast: 'Bread Omelette, Cornflakes, Milk, Juice', Lunch: 'Chole Bhature, Raita, Salad, Lassi',       Snacks: 'Popcorn, Juice, Biscuits',      Dinner: 'Dal Makhani, Shahi Paneer, Naan, Rice, Kheer'   },
       };
       await runAsync('BEGIN TRANSACTION');
       for (const [day, meals] of Object.entries(defaultMenu)) {
@@ -250,7 +267,6 @@ const countToTrafficLevel = (count) => {
         }
       }
       await runAsync('COMMIT');
-      console.log('✅ Weekly menu seeded!');
     }
 
     const today = getTodayIST();
@@ -259,11 +275,9 @@ const countToTrafficLevel = (count) => {
       if (hostelCounts.hasOwnProperty(row.hostel)) hostelCounts[row.hostel] = row.count;
     }
     console.log("✅ Today's hostel delivery counts loaded:", hostelCounts);
-    console.log('✅ All DB tables ready.');
+    console.log('✅ All DB tables ready (v7 — Purchases, Waste_Logs added).');
 
-  } catch (err) {
-    console.error('❌ DB init failed:', err);
-  }
+  } catch (err) { console.error('❌ DB init failed:', err); }
 })();
 
 // =============================================================================
@@ -282,7 +296,7 @@ io.on('connection', (socket) => {
       await runAsync(`INSERT INTO Hostel_Deliveries (date, hostel, count) VALUES (?, ?, ?)
         ON CONFLICT(date, hostel) DO UPDATE SET count = excluded.count`,
         [today, hostel, hostelCounts[hostel]]);
-    } catch (err) { console.error(`❌ Failed to persist delivery count:`, err.message); }
+    } catch (err) { console.error(`❌ delivery persist failed:`, err.message); }
   });
 
   socket.on('disconnect', () => console.log(`🔌 Client disconnected: ${socket.id}`));
@@ -295,7 +309,7 @@ app.post('/api/signup', async (req, res) => {
   const { name, mobile_no, password, role, hostel_name = '' } = req.body;
   if (!name || !mobile_no || !password || !role)
     return res.status(400).json({ success: false, error: 'All fields are required.' });
-  if (!['student', 'contractor', 'guard'].includes(role))
+  if (!['student', 'contractor', 'guard', 'warden'].includes(role))
     return res.status(400).json({ success: false, error: 'Invalid role.' });
   if (password.length < 6)
     return res.status(400).json({ success: false, error: 'Password must be at least 6 characters.' });
@@ -328,8 +342,8 @@ app.post('/api/login', async (req, res) => {
       [name.trim(), password, role]
     );
     if (!user)
-      return res.status(401).json({ success: false, error: 'Invalid credentials. Check your name, password and role.' });
-    res.json({ success: true, message: 'Login successful!', user: { id: user.id, name: user.name, role: user.role, hostel_name: user.hostel_name || '' } });
+      return res.status(401).json({ success: false, error: 'Invalid credentials.' });
+    res.json({ success: true, user: { id: user.id, name: user.name, role: user.role, hostel_name: user.hostel_name || '' } });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -364,9 +378,8 @@ app.get('/api/meal-history/:student_id', async (req, res) => {
     }
     const earliest = dates[dates.length - 1];
     const rows = await allAsync(
-      `SELECT date, meal_type, cancelled, cancelled_at, reason
-       FROM Daily_Meals WHERE student_id = ? AND date BETWEEN ? AND ?
-       ORDER BY date DESC, meal_type`,
+      `SELECT date, meal_type, cancelled, cancelled_at, reason FROM Daily_Meals
+       WHERE student_id = ? AND date BETWEEN ? AND ? ORDER BY date DESC, meal_type`,
       [studentId, earliest, today]
     );
     const mealMap = {};
@@ -391,8 +404,8 @@ app.get('/api/leaderboard', async (req, res) => {
   const month = getTodayIST().substring(0, 7);
   try {
     const rows = await allAsync(`
-      SELECT s.name, COUNT(*) AS cancellations
-      FROM Daily_Meals dm JOIN Students s ON s.id = dm.student_id
+      SELECT s.name, COUNT(*) AS cancellations FROM Daily_Meals dm
+      JOIN Students s ON s.id = dm.student_id
       WHERE dm.cancelled = 1 AND dm.date LIKE ?
       GROUP BY dm.student_id, s.name ORDER BY cancellations DESC LIMIT 15
     `, [`${month}%`]);
@@ -451,7 +464,7 @@ app.post('/api/ratings', async (req, res) => {
     return res.status(400).json({ success: false, error: 'stars must be between 1 and 5.' });
   try {
     await runAsync('INSERT INTO Ratings (meal_date, meal_type, stars) VALUES (?, ?, ?)', [meal_date, meal_type, starsInt]);
-    res.json({ success: true, message: 'Rating submitted! Thank you.' });
+    res.json({ success: true, message: 'Rating submitted!' });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -465,12 +478,9 @@ app.get('/api/ratings/all', async (req, res) => {
     );
     const result = {};
     for (const mealType of MEAL_TYPES) {
-      const mealRows = rows.filter(r => r.meal_type === mealType);
-      const breakdown = [5, 4, 3, 2, 1].map(s => {
-        const found = mealRows.find(r => r.stars === s);
-        return { stars: s, count: found ? found.count : 0 };
-      });
-      const total = breakdown.reduce((sum, b) => sum + b.count, 0);
+      const mealRows  = rows.filter(r => r.meal_type === mealType);
+      const breakdown = [5,4,3,2,1].map(s => { const f = mealRows.find(r => r.stars === s); return { stars: s, count: f ? f.count : 0 }; });
+      const total     = breakdown.reduce((sum, b) => sum + b.count, 0);
       result[mealType] = {
         total_ratings: total,
         avg_stars: total > 0 ? (breakdown.reduce((sum, b) => sum + b.stars * b.count, 0) / total).toFixed(1) : null,
@@ -482,13 +492,11 @@ app.get('/api/ratings/all', async (req, res) => {
 });
 
 // =============================================================================
-// INVENTORY (STORE ROOM)
+// INVENTORY
 // =============================================================================
 app.get('/api/inventory', async (req, res) => {
-  try {
-    const items = await allAsync('SELECT * FROM Inventory ORDER BY created_at DESC');
-    res.json({ success: true, items });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  try { res.json({ success: true, items: await allAsync('SELECT * FROM Inventory ORDER BY created_at DESC') }); }
+  catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/api/inventory', async (req, res) => {
@@ -496,39 +504,27 @@ app.post('/api/inventory', async (req, res) => {
   if (!item_name || !date_bought || quantity === undefined)
     return res.status(400).json({ success: false, error: 'item_name, date_bought, and quantity are required.' });
   const qty = parseInt(quantity, 10);
-  if (isNaN(qty) || qty < 0)
-    return res.status(400).json({ success: false, error: 'quantity must be a non-negative integer.' });
+  if (isNaN(qty) || qty < 0) return res.status(400).json({ success: false, error: 'quantity must be a non-negative integer.' });
   try {
-    const result = await runAsync(
-      'INSERT INTO Inventory (item_name, date_bought, quantity) VALUES (?, ?, ?)',
-      [item_name.trim(), date_bought, qty]
-    );
-    const item = await getAsync('SELECT * FROM Inventory WHERE id = ?', [result.lastID]);
-    res.json({ success: true, message: 'Item added!', item });
+    const result = await runAsync('INSERT INTO Inventory (item_name, date_bought, quantity) VALUES (?, ?, ?)', [item_name.trim(), date_bought, qty]);
+    res.json({ success: true, item: await getAsync('SELECT * FROM Inventory WHERE id = ?', [result.lastID]) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.put('/api/inventory/:id', async (req, res) => {
-  const { id }      = req.params;
-  const { quantity } = req.body;
-  if (quantity === undefined)
-    return res.status(400).json({ success: false, error: 'quantity is required.' });
-  const qty = parseInt(quantity, 10);
-  if (isNaN(qty) || qty < 0)
-    return res.status(400).json({ success: false, error: 'quantity must be a non-negative integer.' });
+  const qty = parseInt(req.body.quantity, 10);
+  if (isNaN(qty) || qty < 0) return res.status(400).json({ success: false, error: 'quantity must be >= 0.' });
   try {
-    await runAsync('UPDATE Inventory SET quantity = ? WHERE id = ?', [qty, id]);
-    const item = await getAsync('SELECT * FROM Inventory WHERE id = ?', [id]);
+    await runAsync('UPDATE Inventory SET quantity = ? WHERE id = ?', [qty, req.params.id]);
+    const item = await getAsync('SELECT * FROM Inventory WHERE id = ?', [req.params.id]);
     if (!item) return res.status(404).json({ success: false, error: 'Item not found.' });
-    res.json({ success: true, message: 'Quantity updated!', item });
+    res.json({ success: true, item });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.delete('/api/inventory/:id', async (req, res) => {
-  try {
-    await runAsync('DELETE FROM Inventory WHERE id = ?', [req.params.id]);
-    res.json({ success: true, message: 'Item deleted.' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  try { await runAsync('DELETE FROM Inventory WHERE id = ?', [req.params.id]); res.json({ success: true }); }
+  catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // =============================================================================
@@ -541,7 +537,6 @@ app.get('/api/workers', async (req, res) => {
     const attendanceRows = await allAsync('SELECT worker_id, status FROM Attendance WHERE date = ?', [today]);
     const attendanceMap  = {};
     for (const row of attendanceRows) attendanceMap[row.worker_id] = row.status;
-
     const enriched = workers.map(w => {
       const onLeave = w.leave_until && today <= w.leave_until;
       return { ...w, today_status: onLeave ? 'On Leave' : (attendanceMap[w.id] || null), on_leave: !!onLeave };
@@ -555,40 +550,34 @@ app.post('/api/workers', async (req, res) => {
   if (!name) return res.status(400).json({ success: false, error: 'name is required.' });
   try {
     const result = await runAsync('INSERT INTO Workers (name, role) VALUES (?, ?)', [name.trim(), role.trim()]);
-    const worker = await getAsync('SELECT * FROM Workers WHERE id = ?', [result.lastID]);
-    res.json({ success: true, message: 'Worker added!', worker });
+    res.json({ success: true, worker: await getAsync('SELECT * FROM Workers WHERE id = ?', [result.lastID]) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/api/workers/:id/attendance', async (req, res) => {
-  const { id }     = req.params;
   const { status } = req.body;
-  if (!['Present', 'Absent', 'On Leave'].includes(status))
-    return res.status(400).json({ success: false, error: 'status must be Present, Absent, or On Leave.' });
+  if (!['Present','Absent','On Leave'].includes(status))
+    return res.status(400).json({ success: false, error: 'Invalid status.' });
   const today = getTodayIST();
   try {
     await runAsync(`INSERT INTO Attendance (worker_id, date, status) VALUES (?, ?, ?)
-      ON CONFLICT(worker_id, date) DO UPDATE SET status = excluded.status`,
-      [id, today, status]);
-    res.json({ success: true, message: `Attendance marked: ${status}` });
+      ON CONFLICT(worker_id, date) DO UPDATE SET status = excluded.status`, [req.params.id, today, status]);
+    res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.put('/api/workers/:id/leave', async (req, res) => {
-  const { id }          = req.params;
   const { leave_until } = req.body;
   try {
-    await runAsync('UPDATE Workers SET leave_until = ? WHERE id = ?', [leave_until || null, id]);
+    await runAsync('UPDATE Workers SET leave_until = ? WHERE id = ?', [leave_until || null, req.params.id]);
     if (leave_until) {
-      const today = getTodayIST();
-      const dates = getDatesInRange(today, leave_until);
+      const dates = getDatesInRange(getTodayIST(), leave_until);
       for (const date of dates) {
         await runAsync(`INSERT INTO Attendance (worker_id, date, status) VALUES (?, ?, 'On Leave')
-          ON CONFLICT(worker_id, date) DO UPDATE SET status = 'On Leave'`, [id, date]);
+          ON CONFLICT(worker_id, date) DO UPDATE SET status = 'On Leave'`, [req.params.id, date]);
       }
     }
-    const worker = await getAsync('SELECT * FROM Workers WHERE id = ?', [id]);
-    res.json({ success: true, message: 'Leave updated!', worker });
+    res.json({ success: true, worker: await getAsync('SELECT * FROM Workers WHERE id = ?', [req.params.id]) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -596,7 +585,194 @@ app.delete('/api/workers/:id', async (req, res) => {
   try {
     await runAsync('DELETE FROM Attendance WHERE worker_id = ?', [req.params.id]);
     await runAsync('DELETE FROM Workers WHERE id = ?', [req.params.id]);
-    res.json({ success: true, message: 'Worker removed.' });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// =============================================================================
+// PURCHASES (Financial Tracking)
+// =============================================================================
+app.get('/api/purchases', async (req, res) => {
+  try {
+    const purchases = await allAsync('SELECT id, date, amount, description, receipt_image, created_at FROM Purchases ORDER BY created_at DESC');
+    res.json({ success: true, purchases });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.post('/api/purchases', async (req, res) => {
+  const { date, amount, description = '', receipt_image = null } = req.body;
+  if (!date || amount === undefined)
+    return res.status(400).json({ success: false, error: 'date and amount are required.' });
+  const amt = parseFloat(amount);
+  if (isNaN(amt) || amt < 0)
+    return res.status(400).json({ success: false, error: 'amount must be a non-negative number.' });
+  try {
+    const result = await runAsync(
+      'INSERT INTO Purchases (date, amount, description, receipt_image) VALUES (?, ?, ?, ?)',
+      [date, amt, description.trim(), receipt_image || null]
+    );
+    const purchase = await getAsync('SELECT id, date, amount, description, receipt_image, created_at FROM Purchases WHERE id = ?', [result.lastID]);
+    res.json({ success: true, message: 'Purchase recorded!', purchase });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.delete('/api/purchases/:id', async (req, res) => {
+  try {
+    await runAsync('DELETE FROM Purchases WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Purchase deleted.' });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// =============================================================================
+// WASTE LOGS
+// =============================================================================
+app.get('/api/waste-logs', async (req, res) => {
+  const { date } = req.query;
+  try {
+    const query = date
+      ? 'SELECT * FROM Waste_Logs WHERE date = ? ORDER BY created_at DESC'
+      : 'SELECT * FROM Waste_Logs ORDER BY date DESC, created_at DESC LIMIT 50';
+    const logs = date ? await allAsync(query, [date]) : await allAsync(query);
+    res.json({ success: true, logs });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.post('/api/waste-logs', async (req, res) => {
+  const { date, meal_type, weight_kg, notes = '' } = req.body;
+  if (!date || !meal_type || weight_kg === undefined)
+    return res.status(400).json({ success: false, error: 'date, meal_type, and weight_kg are required.' });
+  if (!MEAL_TYPES.includes(meal_type))
+    return res.status(400).json({ success: false, error: 'Invalid meal_type.' });
+  const weight = parseFloat(weight_kg);
+  if (isNaN(weight) || weight < 0)
+    return res.status(400).json({ success: false, error: 'weight_kg must be a non-negative number.' });
+  try {
+    const result = await runAsync(
+      'INSERT INTO Waste_Logs (date, meal_type, weight_kg, notes) VALUES (?, ?, ?, ?)',
+      [date, meal_type, weight, notes.trim()]
+    );
+    const log = await getAsync('SELECT * FROM Waste_Logs WHERE id = ?', [result.lastID]);
+    res.json({ success: true, message: 'Waste log saved!', log });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.delete('/api/waste-logs/:id', async (req, res) => {
+  try {
+    await runAsync('DELETE FROM Waste_Logs WHERE id = ?', [req.params.id]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// =============================================================================
+// WARDEN STATS — aggregated analytics endpoint
+// =============================================================================
+app.get('/api/warden-stats', async (req, res) => {
+  try {
+    const today   = getTodayIST();
+    const cursor  = new Date(today + 'T00:00:00+05:30');
+    cursor.setDate(cursor.getDate() - 6); // 7 days ago
+    const weekAgo = cursor.toISOString().split('T')[0];
+
+    // Total expenditure (all time)
+    const { total_spent } = await getAsync('SELECT COALESCE(SUM(amount), 0) AS total_spent FROM Purchases');
+
+    // Weekly expenditure
+    const { weekly_spent } = await getAsync(
+      'SELECT COALESCE(SUM(amount), 0) AS weekly_spent FROM Purchases WHERE date >= ?', [weekAgo]
+    );
+
+    // Purchase count
+    const { purchase_count } = await getAsync('SELECT COUNT(*) AS purchase_count FROM Purchases');
+
+    // Last 5 purchases (for preview, no base64 image to keep response small)
+    const recentPurchases = await allAsync(
+      'SELECT id, date, amount, description FROM Purchases ORDER BY created_at DESC LIMIT 5'
+    );
+
+    // All bills (with image)
+    const allPurchases = await allAsync(
+      'SELECT id, date, amount, description, receipt_image FROM Purchases ORDER BY created_at DESC'
+    );
+
+    // Overall average rating for the last 7 days
+    const { avg_rating, total_ratings } = await getAsync(
+      `SELECT ROUND(AVG(stars), 1) AS avg_rating, COUNT(*) AS total_ratings FROM Ratings WHERE meal_date >= ?`,
+      [weekAgo]
+    );
+
+    // Rating breakdown for 7 days
+    const ratingBreakdown = await allAsync(
+      `SELECT stars, COUNT(*) AS count FROM Ratings WHERE meal_date >= ? GROUP BY stars ORDER BY stars DESC`,
+      [weekAgo]
+    );
+
+    // Top 3 most cancelled meal types (by count of cancellations for this week)
+    const topCancelledMeals = await allAsync(
+      `SELECT meal_type, COUNT(*) AS count FROM Daily_Meals
+       WHERE cancelled = 1 AND date >= ? GROUP BY meal_type ORDER BY count DESC LIMIT 3`,
+      [weekAgo]
+    );
+
+    // Top skipped dishes (cancelled with reason "Don't like this meal")
+    const topSkippedDishes = await allAsync(
+      `SELECT meal_type, COUNT(*) AS count FROM Daily_Meals
+       WHERE cancelled = 1 AND LOWER(reason) LIKE '%don%t like%' AND date >= ?
+       GROUP BY meal_type ORDER BY count DESC LIMIT 3`,
+      [weekAgo]
+    );
+
+    // Also join with menu to get actual dish names when possible
+    const topSkippedWithMenu = await allAsync(
+      `SELECT dm.meal_type, COUNT(*) AS count,
+              (SELECT wm.items FROM Weekly_Menu wm
+               WHERE wm.day_of_week = CASE strftime('%w', dm.date)
+                 WHEN '0' THEN 'Sunday' WHEN '1' THEN 'Monday' WHEN '2' THEN 'Tuesday'
+                 WHEN '3' THEN 'Wednesday' WHEN '4' THEN 'Thursday' WHEN '5' THEN 'Friday'
+                 ELSE 'Saturday' END AND wm.meal_type = dm.meal_type LIMIT 1) AS menu_items
+       FROM Daily_Meals dm
+       WHERE dm.cancelled = 1 AND dm.date >= ?
+       GROUP BY dm.meal_type ORDER BY count DESC LIMIT 3`,
+      [weekAgo]
+    );
+
+    // Total waste this week (kg)
+    const { total_waste_kg } = await getAsync(
+      'SELECT COALESCE(SUM(weight_kg), 0) AS total_waste_kg FROM Waste_Logs WHERE date >= ?', [weekAgo]
+    );
+
+    // Per-meal waste breakdown
+    const wasteByMeal = await allAsync(
+      'SELECT meal_type, ROUND(SUM(weight_kg), 2) AS total_kg FROM Waste_Logs WHERE date >= ? GROUP BY meal_type ORDER BY total_kg DESC',
+      [weekAgo]
+    );
+
+    res.json({
+      success: true,
+      period: { from: weekAgo, to: today },
+      financial: {
+        total_spent:      parseFloat(total_spent.toFixed(2)),
+        weekly_spent:     parseFloat(weekly_spent.toFixed(2)),
+        purchase_count,
+        recent_purchases: recentPurchases,
+        all_purchases:    allPurchases,
+      },
+      satisfaction: {
+        avg_rating:    avg_rating || null,
+        total_ratings,
+        breakdown:     [5,4,3,2,1].map(s => {
+          const f = ratingBreakdown.find(r => r.stars === s);
+          return { stars: s, count: f ? f.count : 0 };
+        }),
+      },
+      cancellations: {
+        top_cancelled_meals: topCancelledMeals,
+        top_skipped_dishes:  topSkippedWithMenu,
+      },
+      waste: {
+        total_waste_kg:  parseFloat(total_waste_kg.toFixed(2)),
+        by_meal:         wasteByMeal,
+      },
+    });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -617,23 +793,17 @@ app.get('/hostel-deliveries', async (req, res) => {
 app.get('/hostels', (req, res) => res.json({ success: true, hostels: HOSTELS }));
 
 app.get('/students', async (req, res) => {
-  try {
-    const students = await allAsync('SELECT id, name, roll_number FROM Students LIMIT 10');
-    res.json({ success: true, students });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  try { res.json({ success: true, students: await allAsync('SELECT id, name, roll_number FROM Students LIMIT 10') }); }
+  catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.get('/meal-status/:student_id/:date', async (req, res) => {
   const studentId = parseInt(req.params.student_id, 10);
-  const date      = req.params.date;
   try {
-    const rows = await allAsync(
-      'SELECT meal_type, cancelled FROM Daily_Meals WHERE student_id = ? AND date = ?',
-      [studentId, date]
-    );
+    const rows = await allAsync('SELECT meal_type, cancelled FROM Daily_Meals WHERE student_id = ? AND date = ?', [studentId, req.params.date]);
     const statuses = { Breakfast: false, Lunch: false, Snacks: false, Dinner: false };
     for (const row of rows) statuses[row.meal_type] = row.cancelled === 1;
-    res.json({ success: true, student_id: studentId, date, statuses });
+    res.json({ success: true, student_id: studentId, date: req.params.date, statuses });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -644,46 +814,33 @@ app.post('/cancel-meal', async (req, res) => {
   if (!MEAL_TYPES.includes(meal_type))
     return res.status(400).json({ success: false, error: 'Invalid meal_type.' });
   try {
-    const existing = await getAsync(
-      'SELECT id, cancelled FROM Daily_Meals WHERE student_id = ? AND date = ? AND meal_type = ?',
-      [student_id, date, meal_type]
-    );
+    const existing = await getAsync('SELECT id, cancelled FROM Daily_Meals WHERE student_id = ? AND date = ? AND meal_type = ?', [student_id, date, meal_type]);
     if (!existing) {
-      await runAsync(
-        'INSERT INTO Daily_Meals (student_id, date, meal_type, cancelled, cancelled_at, reason) VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP, ?)',
-        [student_id, date, meal_type, reason.trim()]
-      );
-      return res.json({ success: true, action: 'cancelled', meal_type, message: `${meal_type} cancelled for ${date}.` });
+      await runAsync('INSERT INTO Daily_Meals (student_id, date, meal_type, cancelled, cancelled_at, reason) VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP, ?)', [student_id, date, meal_type, reason.trim()]);
+      return res.json({ success: true, action: 'cancelled', meal_type, message: `${meal_type} cancelled.` });
     } else if (existing.cancelled === 1) {
-      await runAsync(
-        'UPDATE Daily_Meals SET cancelled = 0, cancelled_at = NULL, reason = NULL WHERE student_id = ? AND date = ? AND meal_type = ?',
-        [student_id, date, meal_type]
-      );
-      return res.json({ success: true, action: 'reinstated', meal_type, message: `${meal_type} reinstated for ${date}.` });
+      await runAsync('UPDATE Daily_Meals SET cancelled = 0, cancelled_at = NULL, reason = NULL WHERE student_id = ? AND date = ? AND meal_type = ?', [student_id, date, meal_type]);
+      return res.json({ success: true, action: 'reinstated', meal_type, message: `${meal_type} reinstated.` });
     } else {
-      await runAsync(
-        'UPDATE Daily_Meals SET cancelled = 1, cancelled_at = CURRENT_TIMESTAMP, reason = ? WHERE student_id = ? AND date = ? AND meal_type = ?',
-        [reason.trim(), student_id, date, meal_type]
-      );
-      return res.json({ success: true, action: 'cancelled', meal_type, message: `${meal_type} cancelled for ${date}.` });
+      await runAsync('UPDATE Daily_Meals SET cancelled = 1, cancelled_at = CURRENT_TIMESTAMP, reason = ? WHERE student_id = ? AND date = ? AND meal_type = ?', [reason.trim(), student_id, date, meal_type]);
+      return res.json({ success: true, action: 'cancelled', meal_type, message: `${meal_type} cancelled.` });
     }
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.get('/menu/:date', async (req, res) => {
-  const dateStr = req.params.date;
-  const dayName = getDayName(dateStr);
+  const dayName = getDayName(req.params.date);
   try {
     const rows = await allAsync('SELECT meal_type, items FROM Weekly_Menu WHERE day_of_week = ?', [dayName]);
     const menu = { Breakfast: '', Lunch: '', Snacks: '', Dinner: '' };
     for (const row of rows) menu[row.meal_type] = row.items;
-    res.json({ success: true, date: dateStr, day: dayName, menu });
+    res.json({ success: true, date: req.params.date, day: dayName, menu });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.get('/menu-week', async (req, res) => {
   try {
-    const rows = await allAsync('SELECT day_of_week, meal_type, items FROM Weekly_Menu');
+    const rows    = await allAsync('SELECT day_of_week, meal_type, items FROM Weekly_Menu');
     const weekMenu = {};
     for (const day of DAYS_OF_WEEK) weekMenu[day] = { Breakfast: '', Lunch: '', Snacks: '', Dinner: '' };
     for (const row of rows) { if (weekMenu[row.day_of_week]) weekMenu[row.day_of_week][row.meal_type] = row.items; }
@@ -706,10 +863,7 @@ app.put('/menu', async (req, res) => {
     }
     await runAsync('COMMIT');
     res.json({ success: true, message: 'Weekly menu updated.' });
-  } catch (e) {
-    await runAsync('ROLLBACK').catch(() => {});
-    res.status(500).json({ success: false, error: e.message });
-  }
+  } catch (e) { await runAsync('ROLLBACK').catch(() => {}); res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/apply-leave', async (req, res) => {
@@ -727,19 +881,13 @@ app.post('/apply-leave', async (req, res) => {
     await runAsync('BEGIN TRANSACTION');
     for (const date of dates) {
       for (const mealType of MEAL_TYPES) {
-        await runAsync(
-          'INSERT OR REPLACE INTO Daily_Meals (student_id, date, meal_type, cancelled, cancelled_at, reason) VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP, ?)',
-          [student_id, date, mealType, 'Leave applied']
-        );
+        await runAsync('INSERT OR REPLACE INTO Daily_Meals (student_id, date, meal_type, cancelled, cancelled_at, reason) VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP, ?)', [student_id, date, mealType, 'Leave applied']);
         totalCancelled++;
       }
     }
     await runAsync('COMMIT');
-    res.json({ success: true, message: `Leave applied for ${student.name}. ${dates.length} day(s), ${totalCancelled} meals cancelled.`, student_name: student.name, days_count: dates.length, meals_cancelled: totalCancelled, start_date, end_date });
-  } catch (e) {
-    await runAsync('ROLLBACK').catch(() => {});
-    res.status(500).json({ success: false, error: e.message });
-  }
+    res.json({ success: true, message: `Leave applied for ${student.name}.`, days_count: dates.length, meals_cancelled: totalCancelled, start_date, end_date });
+  } catch (e) { await runAsync('ROLLBACK').catch(() => {}); res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.get('/audit-cancellations', async (req, res) => {
@@ -749,10 +897,8 @@ app.get('/audit-cancellations', async (req, res) => {
     const cancellations = await allAsync(`
       SELECT dm.id, dm.student_id, s.name, s.roll_number, dm.meal_type, dm.cancelled_at, dm.reason, dm.date,
         (SELECT COUNT(*) FROM Daily_Meals dm2 WHERE dm2.student_id = dm.student_id AND dm2.cancelled = 1 AND dm2.date LIKE ?) AS monthly_count
-      FROM Daily_Meals dm
-      JOIN Students s ON s.id = dm.student_id
-      WHERE dm.date = ? AND dm.cancelled = 1
-      ORDER BY dm.cancelled_at DESC
+      FROM Daily_Meals dm JOIN Students s ON s.id = dm.student_id
+      WHERE dm.date = ? AND dm.cancelled = 1 ORDER BY dm.cancelled_at DESC
     `, [`${month}%`, date]);
     const SPAM_THRESHOLD = 15;
     res.json({
@@ -765,77 +911,30 @@ app.get('/audit-cancellations', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// =============================================================================
-// DASHBOARD — Fixed plate calculation (no double-counting)
-//
-// Formula:
-//   ordered_online_count = cancellations with reason "Ordered online" (this meal)
-//   guard_deliveries     = total entries in Delivery_Logs today
-//   extra_deductions     = MAX(0, guard_deliveries - ordered_online_count)
-//   plates_to_prepare    = TOTAL_ENROLLED - meal_cancellations - extra_deductions
-//
-// Rationale: Students who "Ordered online" are already subtracted via cancellations.
-// Guard deliveries that EXCEED that count represent NEW absentees not yet captured.
-// =============================================================================
+// Fixed plate calculation
 app.get('/dashboard', async (req, res) => {
   const today     = getTodayIST();
   const meal_type = req.query.meal_type || 'Lunch';
   const hostel    = req.query.hostel;
-
   if (!MEAL_TYPES.includes(meal_type))
     return res.status(400).json({ success: false, error: 'Invalid meal_type.' });
-
   try {
-    const { count: mealCancellations } = await getAsync(
-      `SELECT COUNT(*) as count FROM Daily_Meals WHERE date = ? AND meal_type = ? AND cancelled = 1`,
-      [today, meal_type]
-    );
-
-    const { count: orderedOnlineCount } = await getAsync(
-      `SELECT COUNT(*) as count FROM Daily_Meals
-       WHERE date = ? AND meal_type = ? AND cancelled = 1 AND LOWER(reason) = 'ordered online'`,
-      [today, meal_type]
-    );
-
-    const { count: totalCancellations } = await getAsync(
-      `SELECT COUNT(*) as count FROM Daily_Meals WHERE date = ? AND cancelled = 1`,
-      [today]
-    );
-
-    const { count: guardDeliveries } = await getAsync(
-      `SELECT COUNT(*) as count FROM Delivery_Logs WHERE date = ?`,
-      [today]
-    );
-
-    // The key fix: guard deliveries already covered by "Ordered online" cancellations
-    // must NOT be subtracted again.
+    const { count: mealCancellations }  = await getAsync(`SELECT COUNT(*) as count FROM Daily_Meals WHERE date = ? AND meal_type = ? AND cancelled = 1`, [today, meal_type]);
+    const { count: orderedOnlineCount } = await getAsync(`SELECT COUNT(*) as count FROM Daily_Meals WHERE date = ? AND meal_type = ? AND cancelled = 1 AND LOWER(reason) = 'ordered online'`, [today, meal_type]);
+    const { count: totalCancellations } = await getAsync(`SELECT COUNT(*) as count FROM Daily_Meals WHERE date = ? AND cancelled = 1`, [today]);
+    const { count: guardDeliveries }    = await getAsync(`SELECT COUNT(*) as count FROM Delivery_Logs WHERE date = ?`, [today]);
     const extraDeductions = Math.max(0, guardDeliveries - orderedOnlineCount);
     const platesToPrepare = Math.max(0, TOTAL_ENROLLED - mealCancellations - extraDeductions);
-
-    const reasonRows = await allAsync(
-      `SELECT COALESCE(reason, 'Not specified') AS reason, COUNT(*) AS count
-       FROM Daily_Meals WHERE date = ? AND meal_type = ? AND cancelled = 1
-       GROUP BY reason ORDER BY count DESC`,
-      [today, meal_type]
-    );
-
+    const reasonRows = await allAsync(`SELECT COALESCE(reason, 'Not specified') AS reason, COUNT(*) AS count FROM Daily_Meals WHERE date = ? AND meal_type = ? AND cancelled = 1 GROUP BY reason ORDER BY count DESC`, [today, meal_type]);
     const liveCount    = hostel && HOSTELS.includes(hostel) ? hostelCounts[hostel] : 0;
-    const trafficLevel = hostel ? countToTrafficLevel(liveCount) : 'N/A';
-
     res.json({
       success: true, date: today, meal_type,
-      total_enrolled:       TOTAL_ENROLLED,
-      meal_cancellations:   mealCancellations,
-      ordered_online_count: orderedOnlineCount,
-      total_cancellations:  totalCancellations,
-      guard_deliveries:     guardDeliveries,
-      extra_deductions:     extraDeductions,
-      plates_to_prepare:    platesToPrepare,
-      expected_attendance:  Math.max(0, TOTAL_ENROLLED - mealCancellations),
-      reason_breakdown:     reasonRows,
-      hostel:               hostel || null,
-      live_delivery_count:  liveCount,
-      traffic_level:        trafficLevel,
+      total_enrolled: TOTAL_ENROLLED, meal_cancellations: mealCancellations,
+      ordered_online_count: orderedOnlineCount, total_cancellations: totalCancellations,
+      guard_deliveries: guardDeliveries, extra_deductions: extraDeductions,
+      plates_to_prepare: platesToPrepare, expected_attendance: Math.max(0, TOTAL_ENROLLED - mealCancellations),
+      reason_breakdown: reasonRows, hostel: hostel || null,
+      live_delivery_count: liveCount, traffic_level: hostel ? countToTrafficLevel(liveCount) : 'N/A',
     });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
@@ -845,8 +944,9 @@ app.get('/dashboard', async (req, res) => {
 // =============================================================================
 server.listen(PORT, () => {
   console.log('\n' + '='.repeat(62));
-  console.log('🚀  Mess Forecasting Backend v6 (Inventory + Staff + Fixed Plates)');
+  console.log('🚀  Mess Forecasting Backend v7 (Purchases + Waste + Warden)');
   console.log(`📡  HTTP  → http://localhost:${PORT}`);
   console.log(`🔌  WS    → ws://localhost:${PORT}`);
+  console.log('🔑  Warden login: admin / admin123');
   console.log('='.repeat(62) + '\n');
 });
