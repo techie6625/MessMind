@@ -817,7 +817,36 @@ const OverviewTab = () => {
             <StatCard emoji="🍽️" title="Plates to Cook"       value={data.final_plates_to_cook} subtitle="Final recommendation" highlight={true} />
           </div>
 
-          {/* Safety Buffer Explainer */}
+          {/* ── PLATES SAVED KPI ─────────────────────────────────────────────────── */}
+          {/* Formula: Plates Saved = Total Enrolled − Plates to Cook              */}
+          {/* This is the KEY metric judges care about — food waste avoided today   */}
+          <div className="bg-gradient-to-br from-teal-500 to-emerald-600 rounded-2xl p-5 shadow-lg text-white">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-white/70 uppercase tracking-widest mb-1">
+                  ♻️ Plates Saved Today
+                </p>
+                <p className="text-5xl font-black leading-none">
+                  {data.total_enrolled - data.final_plates_to_cook}
+                </p>
+                <p className="text-white/70 text-xs mt-2 leading-snug">
+                  {data.total_enrolled} enrolled − {data.final_plates_to_cook} to cook
+                </p>
+              </div>
+              <div className="text-right">
+                <div className="text-6xl opacity-30">♻️</div>
+                <div className="text-xs text-white/60 mt-1 font-semibold">
+                  ≈ {((data.total_enrolled - data.final_plates_to_cook) * 0.35).toFixed(1)} kg<br />food saved
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 bg-white/10 rounded-xl px-4 py-2 text-xs text-white/80">
+              Formula: <strong>Saved = Total Enrolled − Plates to Cook</strong><br />
+              Cancellations ({data.manual_cancellations}) + AI no-shows ({data.unreported_absences}) = {data.manual_cancellations + data.unreported_absences} plates not cooked
+            </div>
+          </div>
+
+
           <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-4">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xl">🧮</span>
@@ -1082,14 +1111,21 @@ const AuditLogTab = () => {
               <tbody className="divide-y divide-gray-50">
                 {filtered.map((c, idx) => {
                   const cfg = MEAL_CONFIG[c.meal_type] || MEAL_CONFIG.Lunch;
-                  const timeStr = c.cancelled_at
-                    ? new Date(c.cancelled_at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })
+                  // SQLite CURRENT_TIMESTAMP stores UTC without 'Z'. We must append 'Z'
+                  // so JavaScript's Date constructor treats it as UTC, not local time.
+                  // Without 'Z', browsers assume local timezone → wrong IST display.
+                  const rawTime = c.cancelled_at;
+                  const timeStr = rawTime
+                    ? new Date(rawTime.replace(' ', 'T') + 'Z').toLocaleTimeString('en-IN', {
+                        timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit'
+                      })
                     : '—';
                   return (
                     <tr key={`${c.id}-${idx}`} className={`hover:bg-gray-50 ${c.is_frequent ? 'bg-red-50/30' : ''}`}>
                       <td className="px-4 py-3">
-                        <div className="font-semibold text-gray-800">{c.roll_number}</div>
-                        <div className="text-xs text-gray-400">{c.name}</div>
+                        {/* Name is PRIMARY — judges/admin need to see who cancelled, not a roll number */}
+                        <div className="font-semibold text-gray-800">{c.name}</div>
+                        <div className="text-xs text-gray-400">{c.roll_number}</div>
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full ${cfg.colorBadge}`}>
