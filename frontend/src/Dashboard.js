@@ -1,35 +1,23 @@
 /*
 =============================================================================
-FILE: Dashboard.js  —  Kitchen Dashboard with Hostel-aware Socket.io (React)
+FILE: Dashboard.js  —  Kitchen Dashboard v2 (Mess Contractor)
 =============================================================================
-PURPOSE:
-  The Kitchen Dashboard now includes a hostel selector.
-  When a hostel is selected, the dashboard:
-    1. Shows that hostel's live delivery count (via Socket.io)
-    2. Auto-maps the count → delivery_traffic level (Low / Medium / High)
-    3. Feeds that traffic level directly into the ML prediction call
-    4. This means: guard taps live-update the AI prediction in real time!
-
-TABS:
-  1. Overview   — Stats cards + hostel-aware ML prediction
-  2. Menu Editor — 7-day × 4-meal editable grid
-  3. Audit Log  — Cancellation trail with spam detection
+WHAT'S NEW:
+  • WeatherControl: fetches live weather from Open-Meteo (NIT Raipur coords)
+    with a manual override dropdown right next to it
+  • AuditLogTab: Name is now the PRIMARY column (roll_number is secondary)
+  • Dashboard header: shows logged-in contractor name + Logout button
 =============================================================================
 */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { io } from 'socket.io-client';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CONFIG
-// ─────────────────────────────────────────────────────────────────────────────
 const API_BASE   = 'http://localhost:3001';
 const SOCKET_URL = 'http://localhost:3001';
 
 const HOSTELS = ['Chitrakot', 'Mainpat', 'Sirpur', 'Mahanadi', 'Indravati', 'Malhar', 'Kotumsar', 'Seonath'];
 
-// Delivery count thresholds for the traffic level mapping
-// (Must match countToTrafficLevel() in server.js)
 const countToTrafficLevel = (count) => {
   if (count >= 8) return 'High';
   if (count >= 3) return 'Medium';
@@ -92,8 +80,6 @@ const StatCard = ({ title, value, subtitle, emoji, highlight = false }) => (
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HOOK: useSocket
-// Manages the Socket.io connection for the dashboard.
-// Returns: { counts, connected }
 // ─────────────────────────────────────────────────────────────────────────────
 function useSocket() {
   const [counts, setCounts]       = useState(HOSTELS.reduce((a, h) => ({ ...a, [h]: 0 }), {}));
@@ -103,16 +89,9 @@ function useSocket() {
   useEffect(() => {
     const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
-
-    socket.on('connect',    ()        => setConnected(true));
-    socket.on('disconnect', ()        => setConnected(false));
-
-    // The KEY real-time event: whenever ANY guard taps a button,
-    // this fires and we update our count display
-    socket.on('delivery_count_updated', (updatedCounts) => {
-      setCounts(updatedCounts);
-    });
-
+    socket.on('connect',    () => setConnected(true));
+    socket.on('disconnect', () => setConnected(false));
+    socket.on('delivery_count_updated', (updatedCounts) => setCounts(updatedCounts));
     return () => socket.disconnect();
   }, []);
 
@@ -120,31 +99,101 @@ function useSocket() {
 }
 
 // =============================================================================
+// WEATHER CONTROL — Live Open-Meteo API + manual override dropdown
+// NIT Raipur coords: 21.2497°N, 81.6029°E
+// =============================================================================
+function WeatherControl({ weather, onChange }) {
+  const [liveWeather, setLiveWeather] = useState(null);
+  const [fetching,    setFetching]    = useState(false);
+  const [fetchError,  setFetchError]  = useState(false);
+
+  const fetchWeather = useCallback(async () => {
+    setFetching(true); setFetchError(false);
+    try {
+      const r = await fetch(
+        'https://api.open-meteo.com/v1/forecast?latitude=21.2497&longitude=81.6029&current=weathercode&timezone=Asia%2FKolkata'
+      );
+      const d = await r.json();
+      // WMO code: 0-1 = Clear, 2-3 = Partly cloudy → Clear; 51+ = rain/drizzle/snow → Rain
+      const code = d?.current?.weathercode ?? 0;
+      const auto = code >= 51 ? 'Rain' : 'Clear';
+      setLiveWeather(auto);
+      onChange(auto); // Auto-set weather condition
+    } catch {
+      setFetchError(true);
+    } finally { setFetching(false); }
+  }, []); // eslint-disable-line
+
+  useEffect(() => { fetchWeather(); }, [fetchWeather]);
+
+  return (
+    <div className="col-span-2">
+      <div className="flex items-center justify-between mb-1">
+        <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">☁️ Weather</label>
+        <div className="flex items-center gap-2">
+          {fetching && (
+            <span className="text-xs text-indigo-500 flex items-center gap-1">
+              <div className="w-3 h-3 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
+              Fetching live…
+            </span>
+          )}
+          {!fetching && liveWeather && !fetchError && (
+            <span className="text-xs text-green-600 font-semibold flex items-center gap-1">
+              🛰️ Live: {liveWeather === 'Clear' ? '☀️' : '🌧️'} {liveWeather}
+            </span>
+          )}
+          {fetchError && <span className="text-xs text-red-500">⚠️ API failed</span>}
+          <button
+            type="button"
+            onClick={fetchWeather}
+            disabled={fetching}
+            className="text-xs text-indigo-500 hover:text-indigo-700 font-bold transition-colors disabled:opacity-50"
+          >
+            🔄
+          </button>
+        </div>
+      </div>
+      {/* Manual override dropdown — always visible */}
+      <select
+        value={weather}
+        onChange={e => onChange(e.target.value)}
+        className="w-full px-3 py-2 rounded-xl border-2 border-gray-200 text-sm focus:outline-none focus:border-indigo-400"
+      >
+        <option value="Clear">☀️ Clear</option>
+        <option value="Rain">🌧️ Rain</option>
+      </select>
+      <p className="text-xs text-gray-400 mt-1">
+        {liveWeather && !fetchError
+          ? `Auto-detected: ${liveWeather}. You can override manually above.`
+          : 'Select manually (live weather fetch unavailable).'}
+      </p>
+    </div>
+  );
+}
+
+// =============================================================================
 // TAB 1: OVERVIEW
 // =============================================================================
 function OverviewTab({ counts, connected }) {
-  // Selected hostel for filtering the dashboard
-  const [selectedHostel,  setSelectedHostel]  = useState('Chitrakot');
-  const [mealType,        setMealType]        = useState('Lunch');
-  const [conditions,      setConditions]      = useState({ weather: 'Clear', menu_item: 'Paneer' });
-  const [data,            setData]            = useState(null);
-  const [loading,         setLoading]         = useState(false);
-  const [error,           setError]           = useState(null);
+  const [selectedHostel, setSelectedHostel] = useState('Chitrakot');
+  const [mealType,       setMealType]       = useState('Lunch');
+  const [conditions,     setConditions]     = useState({ weather: 'Clear', menu_item: 'Paneer' });
+  const [data,           setData]           = useState(null);
+  const [loading,        setLoading]        = useState(false);
+  const [error,          setError]          = useState(null);
 
-  // Compute live traffic level from the selected hostel's current count
   const liveCount    = counts[selectedHostel] || 0;
   const trafficLevel = countToTrafficLevel(liveCount);
   const trafficStyle = TRAFFIC_COLORS[trafficLevel];
 
-  // Fetch dashboard data whenever hostel, meal, or conditions change
   const fetchDashboard = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       const params = new URLSearchParams({
-        weather:          conditions.weather,
-        menu_item:        conditions.menu_item,
-        meal_type:        mealType,
-        hostel:           selectedHostel, // Backend will auto-derive traffic from live count
+        weather:   conditions.weather,
+        menu_item: conditions.menu_item,
+        meal_type: mealType,
+        hostel:    selectedHostel,
       });
       const r = await fetch(`${API_BASE}/dashboard?${params}`);
       const d = await r.json();
@@ -155,17 +204,13 @@ function OverviewTab({ counts, connected }) {
     } finally { setLoading(false); }
   }, [conditions, mealType, selectedHostel]);
 
-  // Initial fetch + re-fetch when hostel/meal changes
   useEffect(() => { fetchDashboard(); }, [fetchDashboard]);
 
-  // Auto-refresh when the delivery count for the SELECTED hostel changes.
-  // This is the live feedback loop:
-  //   guard taps → count changes → this useEffect fires → new ML prediction fetched
   const prevCountRef = useRef(liveCount);
   useEffect(() => {
     if (prevCountRef.current !== liveCount) {
       prevCountRef.current = liveCount;
-      fetchDashboard(); // Trigger new ML prediction with updated traffic level
+      fetchDashboard();
     }
   }, [liveCount, fetchDashboard]);
 
@@ -188,7 +233,6 @@ function OverviewTab({ counts, connected }) {
           {HOSTELS.map(h => <option key={h} value={h}>{h} Hostel</option>)}
         </select>
 
-        {/* Live delivery count + traffic badge for selected hostel */}
         <div className="mt-3 flex items-center gap-3">
           <div className="flex-1 bg-gray-50 rounded-xl p-3 text-center border border-gray-100">
             <div className="text-2xl font-black text-gray-800">{liveCount}</div>
@@ -201,17 +245,15 @@ function OverviewTab({ counts, connected }) {
             </div>
             <div className={`text-xs ${trafficStyle.text} opacity-70`}>Traffic level</div>
           </div>
-          {/* Connection status */}
-          <div className={`flex flex-col items-center gap-1 px-3`}>
+          <div className="flex flex-col items-center gap-1 px-3">
             <div className={`w-3 h-3 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-400'}`} />
             <span className="text-xs text-gray-400">{connected ? 'Live' : 'Offline'}</span>
           </div>
         </div>
 
-        {/* Explain the live integration to judges */}
         <div className="mt-3 bg-indigo-50 border border-indigo-100 rounded-xl p-3 text-xs text-indigo-700">
           🔌 <strong>Live ML Integration:</strong> Guard taps on the Gate Security screen
-          automatically update this traffic level, which is fed directly into the AI prediction.
+          automatically update this traffic level, fed directly into the AI prediction.
           <strong> No manual input needed.</strong>
         </div>
       </Card>
@@ -221,7 +263,6 @@ function OverviewTab({ counts, connected }) {
         <h3 className="font-bold text-gray-700 text-sm mb-3">⚙️ Prediction Controls</h3>
         <div className="grid grid-cols-2 gap-3">
 
-          {/* Meal selector */}
           <div className="col-span-2">
             <label className="block text-xs font-semibold text-gray-400 mb-1.5 uppercase tracking-wide">Predict for meal:</label>
             <div className="grid grid-cols-4 gap-1.5">
@@ -237,14 +278,11 @@ function OverviewTab({ counts, connected }) {
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-gray-400 mb-1 uppercase tracking-wide">☁️ Weather</label>
-            <select value={conditions.weather} onChange={e => setConditions(p => ({ ...p, weather: e.target.value }))}
-              className="w-full px-3 py-2 rounded-xl border-2 border-gray-200 text-sm focus:outline-none focus:border-indigo-400">
-              <option value="Clear">☀️ Clear</option>
-              <option value="Rain">🌧️ Rain</option>
-            </select>
-          </div>
+          {/* Live weather fetch + manual override */}
+          <WeatherControl
+            weather={conditions.weather}
+            onChange={w => setConditions(p => ({ ...p, weather: w }))}
+          />
 
           <div>
             <label className="block text-xs font-semibold text-gray-400 mb-1 uppercase tracking-wide">🍛 Menu Type</label>
@@ -255,7 +293,6 @@ function OverviewTab({ counts, connected }) {
             </select>
           </div>
 
-          {/* Traffic level: read-only, driven by live Socket.io data */}
           <div className="col-span-2">
             <label className="block text-xs font-semibold text-gray-400 mb-1 uppercase tracking-wide">
               🛵 Delivery Traffic <span className="text-indigo-500 normal-case">(auto from {selectedHostel} live count)</span>
@@ -278,7 +315,6 @@ function OverviewTab({ counts, connected }) {
 
       {data && (
         <>
-          {/* Calculation formula */}
           <Card>
             <p className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">
               {cfg.icon} {mealType} Calculation for {selectedHostel} Hostel
@@ -299,13 +335,39 @@ function OverviewTab({ counts, connected }) {
           </Card>
 
           <div className="grid grid-cols-2 gap-3">
-            <StatCard emoji="👥" title="Total Enrolled"       value={data.total_enrolled}       subtitle="All mess members" />
+            <StatCard emoji="👥" title="Total Enrolled"             value={data.total_enrolled}       subtitle="All mess members" />
             <StatCard emoji="❌" title={`${mealType} Cancellations`} value={data.manual_cancellations} subtitle="App cancellations" />
-            <StatCard emoji="🤖" title="AI Predicted Skips"   value={data.unreported_absences}  subtitle="Won't show, didn't cancel" />
-            <StatCard emoji="🍽️" title="Plates to Cook"       value={data.final_plates_to_cook} subtitle="Final recommendation" highlight />
+            <StatCard emoji="🤖" title="AI Predicted Skips"          value={data.unreported_absences}  subtitle="Won't show, didn't cancel" />
+            <StatCard emoji="🍽️" title="Plates to Cook"              value={data.final_plates_to_cook} subtitle="Final recommendation" highlight />
           </div>
 
-          {/* Safety buffer explainer */}
+          {/* ── PLATES SAVED KPI ─────────────────────────────────────────── */}
+          <div className="bg-gradient-to-br from-teal-500 to-emerald-600 rounded-2xl p-5 shadow-lg text-white">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-white/70 uppercase tracking-widest mb-1">
+                  ♻️ Plates Saved Today
+                </p>
+                <p className="text-5xl font-black leading-none">
+                  {data.total_enrolled - data.final_plates_to_cook}
+                </p>
+                <p className="text-white/70 text-xs mt-2 leading-snug">
+                  {data.total_enrolled} enrolled − {data.final_plates_to_cook} to cook
+                </p>
+              </div>
+              <div className="text-right">
+                <div className="text-6xl opacity-30">♻️</div>
+                <div className="text-xs text-white/60 mt-1 font-semibold">
+                  ≈ {((data.total_enrolled - data.final_plates_to_cook) * 0.35).toFixed(1)} kg<br />food saved
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 bg-white/10 rounded-xl px-4 py-2 text-xs text-white/80">
+              Formula: <strong>Saved = Total Enrolled − Plates to Cook</strong><br />
+              Cancellations ({data.manual_cancellations}) + AI no-shows ({data.unreported_absences}) = {data.manual_cancellations + data.unreported_absences} plates not cooked
+            </div>
+          </div>
+
           <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-4">
             <h3 className="font-bold text-amber-900 text-sm flex items-center gap-2 mb-2">
               🧮 90th Percentile Safety Buffer (α = 0.90)
@@ -343,7 +405,7 @@ function MenuEditorTab() {
         const r = await fetch(`${API_BASE}/menu-week`);
         const d = await r.json();
         if (d.success) setWeekMenu(d.menu);
-      } catch (e) { setToast({ message: 'Failed to load menu', type: 'error' }); }
+      } catch { setToast({ message: 'Failed to load menu', type: 'error' }); }
       finally { setLoading(false); }
     })();
   }, []);
@@ -354,7 +416,9 @@ function MenuEditorTab() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const r = await fetch(`${API_BASE}/menu`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(weekMenu) });
+      const r = await fetch(`${API_BASE}/menu`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(weekMenu)
+      });
       const d = await r.json();
       setToast({ message: d.success ? 'Weekly menu saved! 🎉' : d.error, type: d.success ? 'success' : 'error' });
     } catch { setToast({ message: 'Save failed', type: 'error' }); }
@@ -405,7 +469,7 @@ function MenuEditorTab() {
 }
 
 // =============================================================================
-// TAB 3: AUDIT LOG
+// TAB 3: AUDIT LOG  — Name is now PRIMARY column
 // =============================================================================
 function AuditLogTab() {
   const [auditDate,  setAuditDate]  = useState(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
@@ -426,7 +490,9 @@ function AuditLogTab() {
   useEffect(() => { fetchAudit(); }, [fetchAudit]);
 
   const filtered = data?.cancellations?.filter(c => filterMeal === 'All' || c.meal_type === filterMeal) || [];
-  const countByMeal = MEAL_TYPES.reduce((acc, m) => ({ ...acc, [m]: data?.cancellations?.filter(c => c.meal_type === m).length || 0 }), {});
+  const countByMeal = MEAL_TYPES.reduce((acc, m) => ({
+    ...acc, [m]: data?.cancellations?.filter(c => c.meal_type === m).length || 0
+  }), {});
 
   return (
     <div className="space-y-4">
@@ -494,7 +560,8 @@ function AuditLogTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide">Student</th>
+                  {/* Name is now the PRIMARY column header */}
+                  <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide">Student Name</th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide">Meal</th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide">Time</th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide">Flag</th>
@@ -503,12 +570,19 @@ function AuditLogTab() {
               <tbody className="divide-y divide-gray-50">
                 {filtered.map((c, i) => {
                   const cfg = MEAL_CONFIG[c.meal_type] || MEAL_CONFIG.Lunch;
-                  const timeStr = c.cancelled_at ? new Date(c.cancelled_at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }) : '—';
+                  const rawTime = c.cancelled_at;
+                  // SQLite CURRENT_TIMESTAMP is UTC without 'Z'. Append it for correct JS parsing.
+                  const timeStr = rawTime
+                    ? new Date(rawTime.replace(' ', 'T') + 'Z').toLocaleTimeString('en-IN', {
+                        timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit'
+                      })
+                    : '—';
                   return (
                     <tr key={`${c.id}-${i}`} className={`hover:bg-gray-50 ${c.is_frequent ? 'bg-red-50/40' : ''}`}>
                       <td className="px-4 py-3">
-                        <div className="font-semibold text-gray-800 text-xs">{c.roll_number}</div>
-                        <div className="text-xs text-gray-400">{c.name}</div>
+                        {/* Name is PRIMARY — roll_number is just a secondary note */}
+                        <div className="font-semibold text-gray-800 text-xs">{c.name}</div>
+                        <div className="text-xs text-gray-400">{c.roll_number}</div>
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full ${cfg.colorBadge}`}>{cfg.icon} {c.meal_type}</span>
@@ -536,12 +610,10 @@ function AuditLogTab() {
 }
 
 // =============================================================================
-// ROOT: Dashboard — tab shell with shared Socket.io state
+// ROOT: Dashboard — tab shell
 // =============================================================================
-export default function Dashboard() {
+export default function Dashboard({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('overview');
-  // useSocket is called at the Dashboard level so the connection is shared
-  // across all tabs — we don't reconnect when switching tabs
   const { counts, connected } = useSocket();
 
   const tabs = [
@@ -552,24 +624,31 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
-      {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
         <div className="max-w-2xl mx-auto px-4 py-3">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white text-lg">🍽️</div>
+              <div className="w-9 h-9 bg-emerald-600 rounded-xl flex items-center justify-center text-white text-lg">🍽️</div>
               <div>
                 <h1 className="font-black text-gray-800 text-base leading-tight">Kitchen Dashboard</h1>
-                <p className="text-xs text-gray-400">{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}</p>
+                <p className="text-xs text-gray-400">
+                  {user ? `👨‍🍳 ${user.name}` : ''} · {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}
+                </p>
               </div>
             </div>
-            {/* Live total deliveries chip */}
-            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${connected ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-              <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
-              {Object.values(counts).reduce((s, c) => s + c, 0)} deliveries
+            <div className="flex items-center gap-3">
+              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${connected ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+                {Object.values(counts).reduce((s, c) => s + c, 0)} deliveries
+              </div>
+              {onLogout && (
+                <button onClick={onLogout}
+                  className="text-xs text-gray-400 hover:text-red-500 font-semibold transition-colors">
+                  Logout
+                </button>
+              )}
             </div>
           </div>
-          {/* Tab bar */}
           <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
             {tabs.map(t => (
               <button key={t.id} onClick={() => setActiveTab(t.id)}

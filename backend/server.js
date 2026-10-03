@@ -1,20 +1,22 @@
 // =============================================================================
-// FILE: server.js  —  Node.js / Express + Socket.io Backend  (v3)
+// FILE: server.js  —  Node.js / Express + Socket.io Backend  (v4)
 // =============================================================================
-// WHAT'S NEW IN v3:
-//   • Socket.io real-time layer for Gate Security Module
-//   • Per-hostel delivery count tracking (in-memory + SQLite persistence)
-//   • 'log_delivery' event → increment count → broadcast 'delivery_count_updated'
-//   • GET /hostel-deliveries endpoint for initial state on page load
+// WHAT'S NEW IN v4:
+//   • Users table with role-based auth (student / contractor / guard)
+//   • /api/signup and /api/login endpoints
+//   • Mock seed users for testing
+//   • Delivery_Logs table: person name, mobile, hostel, in_time
+//   • /api/delivery-logs GET (audit) and POST (submit) endpoints
+//   • /audit-cancellations now returns student Name (not just roll_number)
 // =============================================================================
 
-const express  = require('express');
-const http     = require('http');         // Node's built-in HTTP module
-const { Server } = require('socket.io'); // Socket.io server class
-const sqlite3  = require('sqlite3').verbose();
-const axios    = require('axios');
-const cors     = require('cors');
-const path     = require('path');
+const express    = require('express');
+const http       = require('http');
+const { Server } = require('socket.io');
+const sqlite3    = require('sqlite3').verbose();
+const axios      = require('axios');
+const cors       = require('cors');
+const path       = require('path');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -23,36 +25,21 @@ const PORT           = 3001;
 const ML_SERVICE_URL = 'http://localhost:8000';
 const MEAL_TYPES     = ['Breakfast', 'Lunch', 'Snacks', 'Dinner'];
 const DAYS_OF_WEEK   = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-// The 8 campus hostels — single source of truth used by both guard UI and dashboard
-const HOSTELS = ['Chitrakot', 'Mainpat', 'Sirpur', 'Mahanadi', 'Indravati', 'Malhar', 'Kotumsar', 'Seonath'];
-
-// Per-meal scaling factors (ML model predicts total attendance; scale for each meal)
-const MEAL_SCALING = { Breakfast: 0.62, Lunch: 1.00, Snacks: 0.48, Dinner: 0.87 };
+const HOSTELS        = ['Chitrakot', 'Mainpat', 'Sirpur', 'Mahanadi', 'Indravati', 'Malhar', 'Kotumsar', 'Seonath'];
+const MEAL_SCALING   = { Breakfast: 0.62, Lunch: 1.00, Snacks: 0.48, Dinner: 0.87 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IN-MEMORY HOSTEL DELIVERY COUNTS
-// Structure: { Chitrakot: 5, Mainpat: 2, ... }
-// This is the source of truth for Socket.io real-time events.
-// It is seeded from SQLite on startup and synced back on every update.
-// WHY IN-MEMORY?  Socket.io needs to broadcast instantly. A DB round-trip
-// on every button tap would add latency. We keep the DB as a durable backup.
 // ─────────────────────────────────────────────────────────────────────────────
 const hostelCounts = HOSTELS.reduce((acc, h) => ({ ...acc, [h]: 0 }), {});
-// Initialises to: { Chitrakot: 0, Mainpat: 0, Sirpur: 0, ... Seonath: 0 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPRESS APP + HTTP SERVER + SOCKET.IO
-// WHY http.createServer(app)?
-//   Socket.io needs access to the raw HTTP server (not just Express).
-//   We attach Socket.io to the same server so both REST API and WebSocket
-//   traffic share port 3001. No extra port needed!
 // ─────────────────────────────────────────────────────────────────────────────
 const app    = express();
-const server = http.createServer(app); // Wrap Express in a native HTTP server
+const server = http.createServer(app);
 
 const io = new Server(server, {
-  // CORS must match the React dev server's origin
   cors: {
     origin:  'http://localhost:3000',
     methods: ['GET', 'POST'],
@@ -109,8 +96,6 @@ const getDatesInRange = (startStr, endStr) => {
   return dates;
 };
 
-// Map a raw delivery count → ML traffic level string
-// This lets the guard's taps directly influence the ML model's predictions!
 const countToTrafficLevel = (count) => {
   if (count >= 8) return 'High';
   if (count >= 3) return 'Medium';
@@ -131,8 +116,26 @@ const countToTrafficLevel = (count) => {
       )
     `);
 
-    // ── Daily_Meals (v2: includes meal_type) ───────────────────────────────
-    const colCheck   = await allAsync(`PRAGMA table_info(Daily_Meals)`);
+    // ── Users (role-based auth) ─────────────────────────────────────────────
+    await runAsync(`
+      CREATE TABLE IF NOT EXISTS Users (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT    NOT NULL,
+        mobile_no   TEXT    NOT NULL,
+        password    TEXT    NOT NULL,
+        role        TEXT    NOT NULL CHECK(role IN ('student','contractor','guard')),
+        hostel_name TEXT    NOT NULL DEFAULT ''
+      )
+    `);
+
+    // ── Migration: add hostel_name column if DB was created before v5 ─────────
+    try {
+      await runAsync(`ALTER TABLE Users ADD COLUMN hostel_name TEXT NOT NULL DEFAULT ''`);
+      console.log('🔄 Migration: added hostel_name column to Users');
+    } catch { /* Column already exists — ignore */ }
+
+    // ── Daily_Meals ────────────────────────────────────────────────────────
+    const colCheck    = await allAsync(`PRAGMA table_info(Daily_Meals)`);
     const hasMealType = colCheck.some(c => c.name === 'meal_type');
     if (!hasMealType && colCheck.length > 0) {
       await runAsync(`DROP TABLE IF EXISTS Daily_Meals`);
@@ -161,7 +164,7 @@ const countToTrafficLevel = (count) => {
       )
     `);
 
-    // ── Leaves ────────────────────────────────────────────────────────────
+    // ── Leaves ─────────────────────────────────────────────────────────────
     await runAsync(`
       CREATE TABLE IF NOT EXISTS Leaves (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,9 +176,7 @@ const countToTrafficLevel = (count) => {
       )
     `);
 
-    // ── NEW: Hostel_Deliveries — persists daily delivery counts per hostel ─
-    // This table survives server restarts. Each row = (date, hostel, count).
-    // UNIQUE(date, hostel) means one row per hostel per day — upsertable.
+    // ── Hostel_Deliveries ──────────────────────────────────────────────────
     await runAsync(`
       CREATE TABLE IF NOT EXISTS Hostel_Deliveries (
         id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,6 +184,19 @@ const countToTrafficLevel = (count) => {
         hostel TEXT    NOT NULL,
         count  INTEGER NOT NULL DEFAULT 0,
         UNIQUE(date, hostel)
+      )
+    `);
+
+    // ── Delivery_Logs (NEW v4) ─────────────────────────────────────────────
+    // Stores full delivery person details logged by the security guard.
+    await runAsync(`
+      CREATE TABLE IF NOT EXISTS Delivery_Logs (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        hostel               TEXT    NOT NULL,
+        delivery_person_name TEXT    NOT NULL,
+        mobile_no            TEXT    NOT NULL,
+        in_time              TEXT    NOT NULL,
+        date                 TEXT    NOT NULL
       )
     `);
 
@@ -197,6 +211,44 @@ const countToTrafficLevel = (count) => {
       }
       await runAsync('COMMIT');
       console.log('✅ 500 students seeded!');
+    }
+
+    // ── SEED: Mock Users for testing ───────────────────────────────────────
+    const { count: uc } = await getAsync('SELECT COUNT(*) as count FROM Users');
+    if (uc === 0) {
+      console.log('🌱 Seeding mock users…');
+      const mockUsers = [
+        { name: 'Navodit',         mobile_no: '9876543210', password: 'student123',    role: 'student',     hostel_name: 'Chitrakot' },
+        { name: 'Rahul Sharma',    mobile_no: '9876543211', password: 'student456',    role: 'student',     hostel_name: 'Mainpat'   },
+        { name: 'Priya Verma',     mobile_no: '9876543214', password: 'student789',    role: 'student',     hostel_name: 'Sirpur'    },
+        { name: 'Mess Contractor', mobile_no: '9876543212', password: 'contractor123', role: 'contractor',  hostel_name: 'Chitrakot' },
+        { name: 'Gate Guard',      mobile_no: '9876543213', password: 'guard123',      role: 'guard',       hostel_name: ''          },
+      ];
+      await runAsync('BEGIN TRANSACTION');
+      for (const u of mockUsers) {
+        await runAsync(
+          'INSERT INTO Users (name, mobile_no, password, role, hostel_name) VALUES (?, ?, ?, ?, ?)',
+          [u.name, u.mobile_no, u.password, u.role, u.hostel_name]
+        );
+      }
+      await runAsync('COMMIT');
+      console.log('✅ Mock users seeded!');
+      console.log('   Student:    Navodit / student123');
+      console.log('   Contractor: Mess Contractor / contractor123');
+      console.log('   Guard:      Gate Guard / guard123');
+    }
+
+    // ── Ensure student users have matching Students table entries ─────────────
+    // This links the Auth (Users) system with the meal cancellation (Students) system.
+    const studentUsers = await allAsync("SELECT name FROM Users WHERE role = 'student'");
+    for (const u of studentUsers) {
+      const existing = await getAsync('SELECT id FROM Students WHERE LOWER(name) = LOWER(?)', [u.name]);
+      if (!existing) {
+        // Auto-generate a roll number from the name
+        const roll = 'U' + u.name.replace(/\s+/g, '').toUpperCase().substring(0, 8);
+        await runAsync('INSERT OR IGNORE INTO Students (name, roll_number) VALUES (?, ?)', [u.name, roll]);
+        console.log(`  ↳ Created Students entry for: ${u.name} (${roll})`);
+      }
     }
 
     // ── SEED: Weekly Menu ──────────────────────────────────────────────────
@@ -222,9 +274,7 @@ const countToTrafficLevel = (count) => {
       console.log('✅ Weekly menu seeded!');
     }
 
-    // ── LOAD TODAY'S HOSTEL DELIVERY COUNTS into in-memory object ──────────
-    // On server restart, we restore today's counts from SQLite so they're
-    // not lost. This makes the system restart-safe.
+    // ── LOAD TODAY'S HOSTEL DELIVERY COUNTS ───────────────────────────────
     const today = getTodayIST();
     const existingCounts = await allAsync(
       'SELECT hostel, count FROM Hostel_Deliveries WHERE date = ?', [today]
@@ -243,50 +293,22 @@ const countToTrafficLevel = (count) => {
 })();
 
 // =============================================================================
-// ─────────────────── SOCKET.IO REAL-TIME LAYER ───────────────────────────────
+// SOCKET.IO REAL-TIME LAYER
 // =============================================================================
-//
-// HOW SOCKET.IO WORKS:
-//   1. The React GateGuardApp connects to this server via WebSocket (ws://)
-//   2. When a guard taps a hostel button, the client emits 'log_delivery'
-//   3. This server increments the hostel count, persists to SQLite,
-//      then broadcasts 'delivery_count_updated' to ALL connected clients
-//   4. Every open dashboard and guard app receives the update instantly
-//
 io.on('connection', (socket) => {
   console.log(`🔌 Client connected: ${socket.id}`);
-
-  // ── SEND CURRENT STATE TO NEWLY CONNECTED CLIENT ──────────────────────
-  // When a new browser tab connects, send them the current counts immediately
-  // so they don't see zeroes while waiting for the next event.
   socket.emit('delivery_count_updated', hostelCounts);
 
-  // ── HANDLE 'log_delivery' EVENT ────────────────────────────────────────
-  // Fired by the GateGuardApp when a guard taps a hostel button.
-  // Payload: { hostel: 'Seonath' }
   socket.on('log_delivery', async ({ hostel }) => {
-    // Validate: hostel must be one of the 8 known hostels
     if (!HOSTELS.includes(hostel)) {
       socket.emit('error', { message: `Unknown hostel: ${hostel}` });
       return;
     }
-
-    // ── INCREMENT IN-MEMORY COUNT ─────────────────────────────────────
-    // This is instantaneous — no DB wait before broadcasting
     hostelCounts[hostel] += 1;
     const newCount = hostelCounts[hostel];
     const today    = getTodayIST();
-
     console.log(`🛵 Delivery logged: ${hostel} → count now ${newCount}`);
-
-    // ── BROADCAST TO ALL CONNECTED CLIENTS ───────────────────────────
-    // io.emit() sends to ALL connected sockets (not just the sender).
-    // This is what makes it "live" — every open dashboard updates instantly.
-    io.emit('delivery_count_updated', { ...hostelCounts }); // Spread to send a copy
-
-    // ── PERSIST TO SQLITE (async — doesn't block the broadcast) ──────
-    // INSERT OR REPLACE upserts: inserts a new row the first time,
-    // replaces it on subsequent taps (updating the count).
+    io.emit('delivery_count_updated', { ...hostelCounts });
     try {
       await runAsync(`
         INSERT INTO Hostel_Deliveries (date, hostel, count)
@@ -298,7 +320,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ── HANDLE DISCONNECT ────────────────────────────────────────────────
   socket.on('disconnect', () => {
     console.log(`🔌 Client disconnected: ${socket.id}`);
   });
@@ -309,21 +330,245 @@ io.on('connection', (socket) => {
 // =============================================================================
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POST /api/signup
+// Body: { name, mobile_no, password, role, hostel_name }
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/api/signup', async (req, res) => {
+  const { name, mobile_no, password, role, hostel_name = '' } = req.body;
+  if (!name || !mobile_no || !password || !role) {
+    return res.status(400).json({ success: false, error: 'All fields are required.' });
+  }
+  if (!['student', 'contractor', 'guard'].includes(role)) {
+    return res.status(400).json({ success: false, error: 'Invalid role.' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ success: false, error: 'Password must be at least 6 characters.' });
+  }
+  if ((role === 'student' || role === 'contractor') && !hostel_name) {
+    return res.status(400).json({ success: false, error: 'Please select a hostel.' });
+  }
+  try {
+    const result = await runAsync(
+      'INSERT INTO Users (name, mobile_no, password, role, hostel_name) VALUES (?, ?, ?, ?, ?)',
+      [name.trim(), mobile_no.trim(), password, role, hostel_name.trim()]
+    );
+
+    // For student role: auto-create a Students entry so meal history works immediately
+    if (role === 'student') {
+      const roll = 'U' + name.trim().replace(/\s+/g, '').toUpperCase().substring(0, 8);
+      await runAsync('INSERT OR IGNORE INTO Students (name, roll_number) VALUES (?, ?)', [name.trim(), roll]);
+    }
+
+    res.json({
+      success: true, message: 'Account created successfully!',
+      user: { id: result.lastID, name: name.trim(), role, hostel_name: hostel_name.trim() }
+    });
+  } catch (e) {
+    if (e.message && e.message.includes('UNIQUE')) {
+      return res.status(409).json({ success: false, error: 'An account with this name and role already exists.' });
+    }
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/login
+// Body: { name, password, role }
+// Returns: { user: { id, name, role, hostel_name } }
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/api/login', async (req, res) => {
+  const { name, password, role } = req.body;
+  if (!name || !password || !role) {
+    return res.status(400).json({ success: false, error: 'Name, password and role are required.' });
+  }
+  try {
+    const user = await getAsync(
+      'SELECT id, name, role, hostel_name FROM Users WHERE LOWER(name) = LOWER(?) AND password = ? AND role = ?',
+      [name.trim(), password, role]
+    );
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Invalid credentials. Check your name, password and role.' });
+    }
+    res.json({
+      success: true, message: 'Login successful!',
+      user: { id: user.id, name: user.name, role: user.role, hostel_name: user.hostel_name || '' }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/ensure-student
+// Body: { name } → Gets or creates a Students row for the given name
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/api/ensure-student', async (req, res) => {
+  const { name } = req.body;
+  if (!name) return res.status(400).json({ success: false, error: 'name is required.' });
+  try {
+    let student = await getAsync('SELECT id, name, roll_number FROM Students WHERE LOWER(name) = LOWER(?)', [name.trim()]);
+    if (!student) {
+      const roll = 'U' + name.trim().replace(/\s+/g, '').toUpperCase().substring(0, 8);
+      const r    = await runAsync('INSERT OR IGNORE INTO Students (name, roll_number) VALUES (?, ?)', [name.trim(), roll]);
+      student    = { id: r.lastID, name: name.trim(), roll_number: roll };
+    }
+    res.json({ success: true, student });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/meal-history/:student_id?days=14
+// Returns the last N days of meal status for a student
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/api/meal-history/:student_id', async (req, res) => {
+  const studentId = parseInt(req.params.student_id, 10);
+  const days      = Math.min(parseInt(req.query.days || '14', 10), 90);
+  if (!studentId) return res.status(400).json({ success: false, error: 'Invalid student_id.' });
+
+  try {
+    // Build list of the last N days (IST)
+    const today  = getTodayIST();
+    const dates  = [];
+    const cursor = new Date(today + 'T00:00:00+05:30');
+    for (let i = 0; i < days; i++) {
+      const d = cursor.toISOString().split('T')[0];
+      dates.push(d);
+      cursor.setDate(cursor.getDate() - 1);
+    }
+
+    // Fetch all meal records in that range
+    const earliest = dates[dates.length - 1];
+    const rows = await allAsync(
+      `SELECT date, meal_type, cancelled, cancelled_at
+       FROM Daily_Meals
+       WHERE student_id = ? AND date BETWEEN ? AND ?
+       ORDER BY date DESC, meal_type`,
+      [studentId, earliest, today]
+    );
+
+    // Build a map: { date → { Breakfast: {...}, Lunch: {...}, ... } }
+    const mealMap = {};
+    for (const row of rows) {
+      if (!mealMap[row.date]) mealMap[row.date] = {};
+      mealMap[row.date][row.meal_type] = {
+        cancelled:    row.cancelled,
+        cancelled_at: row.cancelled_at,
+      };
+    }
+
+    // Only include dates that have at least one record
+    const history = dates
+      .filter(d => mealMap[d])
+      .map(d => ({
+        date:  d,
+        meals: {
+          Breakfast: mealMap[d]['Breakfast'] || { cancelled: 0, cancelled_at: null },
+          Lunch:     mealMap[d]['Lunch']     || { cancelled: 0, cancelled_at: null },
+          Snacks:    mealMap[d]['Snacks']    || { cancelled: 0, cancelled_at: null },
+          Dinner:    mealMap[d]['Dinner']    || { cancelled: 0, cancelled_at: null },
+        }
+      }));
+
+    res.json({ success: true, student_id: studentId, days, history });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/leaderboard
+// Returns top 15 students by cancellations this month (10 pts each)
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/api/leaderboard', async (req, res) => {
+  const month = getTodayIST().substring(0, 7); // 'YYYY-MM'
+  try {
+    const rows = await allAsync(`
+      SELECT s.name, COUNT(*) AS cancellations
+      FROM Daily_Meals dm
+      JOIN Students s ON s.id = dm.student_id
+      WHERE dm.cancelled = 1 AND dm.date LIKE ?
+      GROUP BY dm.student_id, s.name
+      ORDER BY cancellations DESC
+      LIMIT 15
+    `, [`${month}%`]);
+
+    const leaderboard = rows.map(r => ({
+      name:          r.name,
+      cancellations: r.cancellations,
+      points:        r.cancellations * 10,
+    }));
+
+    res.json({ success: true, month, leaderboard });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// POST /api/delivery-logs — Guard submits a delivery log entry
+// Body: { hostel, delivery_person_name, mobile_no, in_time }
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/api/delivery-logs', async (req, res) => {
+  const { hostel, delivery_person_name, mobile_no, in_time } = req.body;
+  if (!hostel || !delivery_person_name || !mobile_no || !in_time) {
+    return res.status(400).json({ success: false, error: 'hostel, delivery_person_name, mobile_no, in_time are required.' });
+  }
+  if (!HOSTELS.includes(hostel)) {
+    return res.status(400).json({ success: false, error: `Unknown hostel: ${hostel}` });
+  }
+  const today = getTodayIST();
+  try {
+    const result = await runAsync(
+      'INSERT INTO Delivery_Logs (hostel, delivery_person_name, mobile_no, in_time, date) VALUES (?, ?, ?, ?, ?)',
+      [hostel, delivery_person_name.trim(), mobile_no.trim(), in_time, today]
+    );
+    // Also emit the socket event to update hostel counts
+    hostelCounts[hostel] = (hostelCounts[hostel] || 0) + 1;
+    const newCount = hostelCounts[hostel];
+    io.emit('delivery_count_updated', { ...hostelCounts });
+    try {
+      await runAsync(`
+        INSERT INTO Hostel_Deliveries (date, hostel, count)
+        VALUES (?, ?, ?)
+        ON CONFLICT(date, hostel) DO UPDATE SET count = excluded.count
+      `, [today, hostel, newCount]);
+    } catch (_) {}
+
+    res.json({ success: true, message: 'Delivery log saved!', id: result.lastID });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/delivery-logs?date=YYYY-MM-DD — Get delivery audit log
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/api/delivery-logs', async (req, res) => {
+  const date = req.query.date || getTodayIST();
+  try {
+    const logs = await allAsync(
+      'SELECT id, hostel, delivery_person_name, mobile_no, in_time, date FROM Delivery_Logs WHERE date = ? ORDER BY id DESC',
+      [date]
+    );
+    res.json({ success: true, date, logs });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /hostel-deliveries?date=YYYY-MM-DD
-// Returns today's (or a specific date's) delivery counts for all 8 hostels.
-// Used to initialise the dashboard on first load (before Socket.io fires).
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/hostel-deliveries', async (req, res) => {
   const date = req.query.date || getTodayIST();
-
-  // For today, serve from the fast in-memory object
   if (date === getTodayIST()) {
     return res.json({ success: true, date, counts: { ...hostelCounts } });
   }
-
-  // For historical dates, query SQLite
   try {
-    const rows  = await allAsync('SELECT hostel, count FROM Hostel_Deliveries WHERE date = ?', [date]);
+    const rows   = await allAsync('SELECT hostel, count FROM Hostel_Deliveries WHERE date = ?', [date]);
     const counts = HOSTELS.reduce((acc, h) => ({ ...acc, [h]: 0 }), {});
     for (const row of rows) { if (counts.hasOwnProperty(row.hostel)) counts[row.hostel] = row.count; }
     res.json({ success: true, date, counts });
@@ -333,7 +578,7 @@ app.get('/hostel-deliveries', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /hostels — returns the list of 8 hostels (used by UI to avoid hardcoding)
+// GET /hostels
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/hostels', (req, res) => {
   res.json({ success: true, hostels: HOSTELS });
@@ -368,7 +613,6 @@ app.get('/meal-status/:student_id/:date', async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /cancel-meal
-// Body: { student_id, date, meal_type }
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/cancel-meal', async (req, res) => {
   const { student_id, date, meal_type } = req.body;
@@ -470,6 +714,7 @@ app.post('/apply-leave', async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /audit-cancellations?date=YYYY-MM-DD
+// v4: returns student Name prominently (not just roll_number)
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/audit-cancellations', async (req, res) => {
   const date  = req.query.date || getTodayIST();
@@ -484,14 +729,18 @@ app.get('/audit-cancellations', async (req, res) => {
       ORDER BY dm.cancelled_at DESC
     `, [`${month}%`, date]);
     const SPAM_THRESHOLD = 15;
-    res.json({ success: true, date, total_cancellations: cancellations.length, unique_students: new Set(cancellations.map(c => c.student_id)).size, spam_threshold: SPAM_THRESHOLD, cancellations: cancellations.map(c => ({ ...c, is_frequent: c.monthly_count >= SPAM_THRESHOLD })) });
+    res.json({
+      success: true, date,
+      total_cancellations: cancellations.length,
+      unique_students: new Set(cancellations.map(c => c.student_id)).size,
+      spam_threshold: SPAM_THRESHOLD,
+      cancellations: cancellations.map(c => ({ ...c, is_frequent: c.monthly_count >= SPAM_THRESHOLD }))
+    });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /dashboard?weather&menu_item&delivery_traffic&meal_type&hostel
-// Now accepts an optional `hostel` param. When provided, the delivery_traffic
-// is auto-derived from that hostel's live count (overrides manual selection).
+// GET /dashboard
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/dashboard', async (req, res) => {
   const today          = getTodayIST();
@@ -499,11 +748,9 @@ app.get('/dashboard', async (req, res) => {
   const weather        = req.query.weather        || 'Clear';
   const menu_item      = req.query.menu_item      || 'Paneer';
   const meal_type      = req.query.meal_type      || 'Lunch';
-  const hostel         = req.query.hostel;  // Optional hostel filter
+  const hostel         = req.query.hostel;
 
-  // If a hostel is specified, auto-derive delivery_traffic from live count.
-  // This is the KEY integration: gate guard taps update ML predictions live!
-  const liveCount      = hostel && HOSTELS.includes(hostel) ? hostelCounts[hostel] : 0;
+  const liveCount        = hostel && HOSTELS.includes(hostel) ? hostelCounts[hostel] : 0;
   const delivery_traffic = hostel ? countToTrafficLevel(liveCount) : (req.query.delivery_traffic || 'Low');
 
   if (!MEAL_TYPES.includes(meal_type)) return res.status(400).json({ success: false, error: 'Invalid meal_type.' });
@@ -543,8 +790,8 @@ app.get('/dashboard', async (req, res) => {
       unreported_absences: unreportedAbsences,
       final_plates_to_cook: finalPlatesToCook,
       conditions: { weather, menu_item, delivery_traffic },
-      live_delivery_count: liveCount,           // Hostel's live count from guard app
-      derived_traffic_level: delivery_traffic,  // What we fed to the ML model
+      live_delivery_count: liveCount,
+      derived_traffic_level: delivery_traffic,
       hostel: hostel || null,
       model_info: mlPrediction ? mlPrediction.model_info : null,
       ml_error: mlError,
@@ -553,13 +800,11 @@ app.get('/dashboard', async (req, res) => {
 });
 
 // =============================================================================
-// START SERVER — NOTE: server.listen() not app.listen()!
-// We must call server.listen() (not app.listen()) because Socket.io is
-// attached to the HTTP server, not the Express app.
+// START SERVER
 // =============================================================================
 server.listen(PORT, () => {
   console.log('\n' + '='.repeat(62));
-  console.log('🚀  Mess Forecasting Backend v3 (Socket.io) is LIVE!');
+  console.log('🚀  Mess Forecasting Backend v4 (Auth + Delivery Logs) is LIVE!');
   console.log(`📡  HTTP  → http://localhost:${PORT}`);
   console.log(`🔌  WS    → ws://localhost:${PORT}`);
   console.log(`🤖  ML    → ${ML_SERVICE_URL}`);

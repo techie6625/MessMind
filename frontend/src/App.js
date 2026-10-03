@@ -21,6 +21,7 @@ KEY CONCEPTS:
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import GateGuardApp from './GateGuardApp';
 import Dashboard from './Dashboard';
+import LandingPage from './LandingPage';
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -282,31 +283,189 @@ const useToast = () => {
 };
 
 // =============================================================================
-// VIEW A: STUDENT APP
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTORY TAB — past meals: Ate vs Skipped with cancel time
+// ─────────────────────────────────────────────────────────────────────────────
+const HistoryTab = ({ studentId }) => {
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-const StudentApp = ({ studentId, setStudentId, students }) => {
-  // ── STATE ──────────────────────────────────────────────────────────────────
-  const [selectedDate, setSelectedDate]   = useState(getTodayIST()); // 'YYYY-MM-DD'
-  const [statuses, setStatuses]           = useState({ Breakfast: false, Lunch: false, Snacks: false, Dinner: false });
-  const [menu, setMenu]                   = useState({ Breakfast: '', Lunch: '', Snacks: '', Dinner: '' });
-  const [loadingMeal, setLoadingMeal]     = useState(null); // Which meal is currently toggling
+  useEffect(() => {
+    if (!studentId) { setLoading(false); return; }
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/meal-history/${studentId}`);
+        const d = await r.json();
+        if (d.success) setHistory(d.history);
+      } catch { /* silent */ }
+      finally { setLoading(false); }
+    })();
+  }, [studentId]);
+
+  if (!studentId) return (
+    <div className="text-center py-10 text-white/60">
+      <p className="text-2xl mb-2">📋</p><p>No student linked.</p>
+    </div>
+  );
+  if (loading) return (
+    <div className="flex justify-center py-12">
+      <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+    </div>
+  );
+  if (history.length === 0) return (
+    <div className="text-center py-10 text-white/60">
+      <p className="text-3xl mb-2">🍽️</p>
+      <p className="font-semibold">No meal history yet.</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-3 pb-6">
+      <p className="text-white/60 text-xs text-center font-semibold uppercase tracking-wide">
+        Last 14 Days · Tap a meal to see details
+      </p>
+      {history.map(day => (
+        <div key={day.date} className="bg-white/10 rounded-2xl p-4 border border-white/10">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-white font-bold text-sm">
+              {new Date(day.date + 'T00:00:00').toLocaleDateString('en-IN', {
+                weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata'
+              })}
+            </span>
+            <span className="text-white/50 text-xs font-mono">{day.date}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {MEAL_TYPES.map(mealType => {
+              const meal = day.meals[mealType];
+              const skipped    = meal?.cancelled === 1;
+              const cancelTime = meal?.cancelled_at
+                ? new Date(meal.cancelled_at.replace(' ', 'T') + 'Z').toLocaleTimeString('en-IN', {
+                    timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true
+                  })
+                : null;
+              return (
+                <div key={mealType}
+                  className={`rounded-xl px-3 py-2 flex items-center gap-2 text-xs font-semibold
+                    ${skipped
+                      ? 'bg-red-900/50 text-red-300 border border-red-700/50'
+                      : 'bg-green-900/30 text-green-300 border border-green-700/30'}`}>
+                  <span className="text-base">{MEAL_CONFIG[mealType]?.icon}</span>
+                  <div>
+                    <div>{mealType}</div>
+                    {skipped
+                      ? <div className="text-red-400 font-mono" style={{ fontSize: '0.6rem' }}>
+                          Skipped {cancelTime ? `@ ${cancelTime}` : ''}
+                        </div>
+                      : <div className="text-green-400" style={{ fontSize: '0.6rem' }}>Ate ✓</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEADERBOARD TAB — top students by cancellation points this month
+// ─────────────────────────────────────────────────────────────────────────────
+const LeaderboardTab = ({ studentName }) => {
+  const [board,   setBoard]   = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/leaderboard`);
+        const d = await r.json();
+        if (d.success) setBoard(d.leaderboard);
+      } catch { /* silent */ }
+      finally { setLoading(false); }
+    })();
+  }, []);
+
+  const medals = ['🥇', '🥈', '🥉'];
+
+  if (loading) return (
+    <div className="flex justify-center py-12">
+      <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+    </div>
+  );
+
+  return (
+    <div className="space-y-3 pb-6">
+      <div className="bg-white/10 rounded-2xl p-4 border border-white/10 text-center">
+        <div className="text-3xl mb-1">🏆</div>
+        <h3 className="text-white font-black text-lg">Responsible Eaters</h3>
+        <p className="text-white/60 text-xs mt-1">
+          10 pts per on-time cancellation · Ranked this month
+        </p>
+      </div>
+
+      {board.length === 0 ? (
+        <div className="text-center text-white/50 py-8">No data yet this month.</div>
+      ) : board.map((entry, i) => {
+        const isMe = studentName && entry.name.toLowerCase() === studentName.toLowerCase();
+        return (
+          <div key={entry.name}
+            className={`flex items-center gap-4 rounded-2xl px-4 py-3 border transition-all
+              ${isMe
+                ? 'bg-indigo-500/30 border-indigo-400/50 shadow-lg shadow-indigo-900/30'
+                : 'bg-white/10 border-white/10'}`}>
+            <div className="w-8 text-center flex-shrink-0">
+              {i < 3
+                ? <span className="text-2xl">{medals[i]}</span>
+                : <span className="text-white/50 font-black text-sm">#{i + 1}</span>}
+            </div>
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-base flex-shrink-0
+              ${isMe ? 'bg-indigo-500 text-white' : 'bg-white/20 text-white'}`}>
+              {entry.name.charAt(0).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className={`font-bold text-sm truncate ${isMe ? 'text-indigo-200' : 'text-white'}`}>
+                {entry.name} {isMe && <span className="text-indigo-300 text-xs">(You)</span>}
+              </div>
+              <div className="text-white/50 text-xs">{entry.cancellations} cancellations this month</div>
+            </div>
+            <div className="text-right flex-shrink-0">
+              <div className={`font-black text-lg ${isMe ? 'text-yellow-300' : 'text-yellow-400'}`}>
+                {entry.points}
+              </div>
+              <div className="text-white/40 text-xs">pts</div>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="bg-white/5 rounded-xl border border-white/10 px-4 py-3 text-xs text-white/50 text-center">
+        💡 Cancel meals on time to earn points and climb the leaderboard!
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TODAY TAB — meal toggle cards + leave application
+// ─────────────────────────────────────────────────────────────────────────────
+const TodayTab = ({ studentId, showToast }) => {
+  const [selectedDate, setSelectedDate]     = useState(getTodayIST());
+  const [statuses, setStatuses]             = useState({ Breakfast: false, Lunch: false, Snacks: false, Dinner: false });
+  const [menu, setMenu]                     = useState({ Breakfast: '', Lunch: '', Snacks: '', Dinner: '' });
+  const [loadingMeal, setLoadingMeal]       = useState(null);
   const [fetchingStatus, setFetchingStatus] = useState(false);
-  const [showLeaveForm, setShowLeaveForm] = useState(false);
-  const [leaveStart, setLeaveStart]       = useState(getTodayIST());
-  const [leaveEnd, setLeaveEnd]           = useState(getTodayIST());
-  const [leavePending, setLeavePending]   = useState(false);
-  const [istMinutes, setIstMinutes]       = useState(getISTMinutes()); // Current IST time in minutes
+  const [showLeaveForm, setShowLeaveForm]   = useState(false);
+  const [leaveStart, setLeaveStart]         = useState(getTodayIST());
+  const [leaveEnd, setLeaveEnd]             = useState(getTodayIST());
+  const [leavePending, setLeavePending]     = useState(false);
+  const [istMinutes, setIstMinutes]         = useState(getISTMinutes());
 
-  const { toast, showToast, dismissToast } = useToast();
-
-  // Update IST minutes every 30 seconds so deadlines dynamically lock
   useEffect(() => {
     const iv = setInterval(() => setIstMinutes(getISTMinutes()), 30000);
     return () => clearInterval(iv);
   }, []);
 
-  // ── FETCH MEAL STATUS when student or date changes ────────────────────────
   useEffect(() => {
     if (!studentId) return;
     const load = async () => {
@@ -321,245 +480,199 @@ const StudentApp = ({ studentId, setStudentId, students }) => {
     load();
   }, [studentId, selectedDate]); // eslint-disable-line
 
-  // ── FETCH MENU for selected date ──────────────────────────────────────────
   useEffect(() => {
-    const load = async () => {
+    (async () => {
       try {
         const r = await fetch(`${API_BASE}/menu/${selectedDate}`);
         const d = await r.json();
         if (d.success) setMenu(d.menu);
-      } catch { /* menu is optional — fail silently */ }
-    };
-    load();
+      } catch { /* optional */ }
+    })();
   }, [selectedDate]);
 
-  // ── DETERMINE IF A MEAL IS LOCKED ─────────────────────────────────────────
-  // A meal is locked if:
-  //   a) The selected date is a past date (can't change anything in the past)
-  //   b) The selected date is TODAY AND current IST time is past the meal's deadline
-  // Future dates are always unlocked.
   const isMealLocked = (mealType) => {
-    if (isPastDate(selectedDate)) return true;               // Past date → always locked
-    if (!isToday(selectedDate))   return false;              // Future date → always unlocked
-    return istMinutes >= MEAL_CONFIG[mealType].deadline;     // Today → check deadline
+    if (isPastDate(selectedDate)) return true;
+    if (!isToday(selectedDate))   return false;
+    return istMinutes >= MEAL_CONFIG[mealType].deadline;
   };
 
-  // ── HANDLE MEAL TOGGLE ─────────────────────────────────────────────────────
   const handleToggle = async (mealType) => {
-    if (!studentId)          { showToast('Please select a student first', 'info'); return; }
-    if (isMealLocked(mealType)) return; // Shouldn't happen (button is disabled), but safety check
-
+    if (!studentId) { showToast('No student linked to this account', 'info'); return; }
+    if (isMealLocked(mealType)) return;
     setLoadingMeal(mealType);
     try {
       const r = await fetch(`${API_BASE}/cancel-meal`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ student_id: studentId, date: selectedDate, meal_type: mealType }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: studentId, date: selectedDate, meal_type: mealType }),
       });
       const d = await r.json();
       if (d.success) {
-        // Optimistic update: flip the local status immediately (no re-fetch needed)
         setStatuses(prev => ({ ...prev, [mealType]: d.action === 'cancelled' }));
         showToast(d.message, d.action === 'cancelled' ? 'info' : 'success');
       } else {
         showToast(d.error || 'Toggle failed', 'error');
       }
-    } catch {
-      showToast('Network error. Is the backend running?', 'error');
-    } finally {
-      setLoadingMeal(null);
-    }
+    } catch { showToast('Network error. Is the backend running?', 'error'); }
+    finally { setLoadingMeal(null); }
   };
 
-  // ── HANDLE LEAVE APPLICATION ───────────────────────────────────────────────
   const handleApplyLeave = async () => {
-    if (!studentId) { showToast('Select a student first', 'info'); return; }
+    if (!studentId) { showToast('No student linked', 'info'); return; }
     if (leaveEnd < leaveStart) { showToast('End date must be after start date', 'error'); return; }
-
     setLeavePending(true);
     try {
       const r = await fetch(`${API_BASE}/apply-leave`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ student_id: studentId, start_date: leaveStart, end_date: leaveEnd }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: studentId, start_date: leaveStart, end_date: leaveEnd }),
       });
       const d = await r.json();
       if (d.success) {
         showToast(d.message, 'success');
         setShowLeaveForm(false);
-        // Refresh status if the leave covers the currently viewed date
-        if (selectedDate >= leaveStart && selectedDate <= leaveEnd) {
+        if (selectedDate >= leaveStart && selectedDate <= leaveEnd)
           setStatuses({ Breakfast: true, Lunch: true, Snacks: true, Dinner: true });
-        }
       } else {
         showToast(d.error || 'Leave application failed', 'error');
       }
-    } catch {
-      showToast('Network error', 'error');
-    } finally {
-      setLeavePending(false);
-    }
+    } catch { showToast('Network error', 'error'); }
+    finally { setLeavePending(false); }
   };
 
-  // Count how many meals are cancelled today
   const cancelledCount = Object.values(statuses).filter(Boolean).length;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-500 pb-20">
-      {toast && <Toast {...toast} onDismiss={dismissToast} />}
+    <div className="space-y-4">
+      <Card>
+        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">📅 Select Date:</label>
+        <input type="date" value={selectedDate} min={getTodayIST()} onChange={e => setSelectedDate(e.target.value)}
+          className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 text-gray-700 focus:outline-none focus:border-indigo-400 font-medium text-sm" />
+        <p className="text-xs text-gray-400 mt-2 text-center">
+          {isToday(selectedDate) ? '📍 Today' : `📆 ${formatDisplayDate(selectedDate)} (${getDayName(selectedDate)})`}
+          {!isToday(selectedDate) && <span className="ml-2 text-green-500 font-semibold">All meals unlocked</span>}
+        </p>
+      </Card>
 
-      {/* ── HEADER ──────────────────────────────────────────────────────── */}
-      <div className="px-4 pt-8 pb-4 text-center text-white">
-        <div className="text-5xl mb-2">🍱</div>
-        <h1 className="text-2xl font-black">Mess Portal</h1>
-        <p className="text-white/70 text-sm">Manage your meals for the day</p>
-      </div>
-
-      <div className="px-4 max-w-md mx-auto space-y-4">
-
-        {/* ── STUDENT SELECTOR ─────────────────────────────────────────── */}
-        <Card>
-          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
-            👤 You are:
-          </label>
-          <select
-            value={studentId || ''}
-            onChange={e => setStudentId(Number(e.target.value))}
-            className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 text-gray-700
-                       focus:outline-none focus:border-indigo-400 font-medium text-sm"
-          >
-            <option value="">Select your name…</option>
-            {students.map(s => (
-              <option key={s.id} value={s.id}>{s.name} ({s.roll_number})</option>
-            ))}
-          </select>
-        </Card>
-
-        {/* ── DATE SELECTOR ────────────────────────────────────────────── */}
-        <Card>
-          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
-            📅 Select Date:
-          </label>
-          <input
-            type="date"
-            value={selectedDate}
-            min={getTodayIST()} // Cannot go back to past dates
-            onChange={e => setSelectedDate(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 text-gray-700
-                       focus:outline-none focus:border-indigo-400 font-medium text-sm"
-          />
-          <p className="text-xs text-gray-400 mt-2 text-center">
-            {isToday(selectedDate) ? '📍 Today' : `📆 ${formatDisplayDate(selectedDate)} (${getDayName(selectedDate)})`}
-            {!isToday(selectedDate) && <span className="ml-2 text-green-500 font-semibold">All meals unlocked</span>}
-          </p>
-        </Card>
-
-        {/* ── STATUS SUMMARY BAR ───────────────────────────────────────── */}
-        {studentId && (
-          <div className={`rounded-2xl px-5 py-3 flex items-center justify-between font-semibold text-sm
-            ${cancelledCount === 0 ? 'bg-green-100 text-green-700' :
-              cancelledCount === 4 ? 'bg-red-100 text-red-700'   :
-                                     'bg-amber-100 text-amber-700'}`}>
-            <span>
-              {cancelledCount === 0 ? '✅ All meals active' :
-               cancelledCount === 4 ? '🚫 All meals cancelled' :
-               `🔴 ${cancelledCount} meal${cancelledCount > 1 ? 's' : ''} cancelled`}
-            </span>
-            {fetchingStatus && <Spinner small />}
-          </div>
-        )}
-
-        {/* ── 4-MEAL TOGGLE GRID ───────────────────────────────────────── */}
-        {fetchingStatus ? (
-          <div className="flex justify-center py-6"><Spinner /></div>
-        ) : (
-          <div className="grid grid-cols-1 gap-3">
-            {MEAL_TYPES.map(mealType => (
-              <MealToggleCard
-                key={mealType}
-                mealType={mealType}
-                cancelled={statuses[mealType]}
-                locked={isMealLocked(mealType)}
-                menuItems={menu[mealType]}
-                onToggle={() => handleToggle(mealType)}
-                loading={loadingMeal === mealType}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* ── APPLY FOR LEAVE ──────────────────────────────────────────── */}
-        <div className="mt-2">
-          <button
-            onClick={() => setShowLeaveForm(v => !v)}
-            className="w-full py-3.5 rounded-2xl bg-white/20 hover:bg-white/30 text-white
-                       font-bold text-sm border-2 border-white/30 transition-all backdrop-blur-sm"
-          >
-            🏡 {showLeaveForm ? 'Cancel Leave Application' : 'Apply for Leave (Going Home?)'}
-          </button>
-
-          {/* Leave form: collapsible */}
-          {showLeaveForm && (
-            <Card className="mt-3">
-              <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
-                <span className="text-xl">🧳</span> Apply for Leave
-              </h3>
-              <p className="text-xs text-gray-400 mb-4">
-                All 4 meals will be automatically cancelled for every day in your selected range.
-              </p>
-
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">Start Date</label>
-                  <input
-                    type="date"
-                    value={leaveStart}
-                    min={minLeaveDate()}
-                    onChange={e => { setLeaveStart(e.target.value); if (e.target.value > leaveEnd) setLeaveEnd(e.target.value); }}
-                    className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 text-sm
-                               focus:outline-none focus:border-indigo-400"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">End Date</label>
-                  <input
-                    type="date"
-                    value={leaveEnd}
-                    min={leaveStart}
-                    onChange={e => setLeaveEnd(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 text-sm
-                               focus:outline-none focus:border-indigo-400"
-                  />
-                </div>
-              </div>
-
-              {/* Preview of how many days */}
-              {leaveStart && leaveEnd && leaveEnd >= leaveStart && (() => {
-                const days = Math.round((new Date(leaveEnd) - new Date(leaveStart)) / 86400000) + 1;
-                return (
-                  <div className="bg-indigo-50 rounded-xl p-3 mb-4 text-xs text-indigo-700 font-semibold text-center">
-                    📆 {days} day{days > 1 ? 's' : ''} • {days * 4} meals will be cancelled
-                  </div>
-                );
-              })()}
-
-              <button
-                onClick={handleApplyLeave}
-                disabled={leavePending || !studentId}
-                className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white
-                           font-bold text-sm disabled:opacity-50 transition-colors"
-              >
-                {leavePending
-                  ? <span className="flex items-center justify-center gap-2"><Spinner small /> Applying…</span>
-                  : '✅ Confirm Leave Application'}
-              </button>
-            </Card>
-          )}
+      {studentId && (
+        <div className={`rounded-2xl px-5 py-3 flex items-center justify-between font-semibold text-sm
+          ${cancelledCount === 0 ? 'bg-green-100 text-green-700' :
+            cancelledCount === 4 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+          <span>
+            {cancelledCount === 0 ? '✅ All meals active' :
+             cancelledCount === 4 ? '🚫 All meals cancelled' :
+             `🔴 ${cancelledCount} meal${cancelledCount > 1 ? 's' : ''} cancelled`}
+          </span>
+          {fetchingStatus && <Spinner small />}
         </div>
+      )}
+
+      {fetchingStatus ? (
+        <div className="flex justify-center py-6"><Spinner /></div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3">
+          {MEAL_TYPES.map(mealType => (
+            <MealToggleCard key={mealType} mealType={mealType} cancelled={statuses[mealType]}
+              locked={isMealLocked(mealType)} menuItems={menu[mealType]}
+              onToggle={() => handleToggle(mealType)} loading={loadingMeal === mealType} />
+          ))}
+        </div>
+      )}
+
+      <div className="mt-2">
+        <button onClick={() => setShowLeaveForm(v => !v)}
+          className="w-full py-3.5 rounded-2xl bg-white/20 hover:bg-white/30 text-white font-bold text-sm border-2 border-white/30 transition-all backdrop-blur-sm">
+          🏡 {showLeaveForm ? 'Cancel Leave Application' : 'Apply for Leave (Going Home?)'}
+        </button>
+        {showLeaveForm && (
+          <Card className="mt-3">
+            <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><span className="text-xl">🧳</span> Apply for Leave</h3>
+            <p className="text-xs text-gray-400 mb-4">All 4 meals will be automatically cancelled for every day in the range.</p>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Start Date</label>
+                <input type="date" value={leaveStart} min={minLeaveDate()}
+                  onChange={e => { setLeaveStart(e.target.value); if (e.target.value > leaveEnd) setLeaveEnd(e.target.value); }}
+                  className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 text-sm focus:outline-none focus:border-indigo-400" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">End Date</label>
+                <input type="date" value={leaveEnd} min={leaveStart} onChange={e => setLeaveEnd(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 text-sm focus:outline-none focus:border-indigo-400" />
+              </div>
+            </div>
+            {leaveStart && leaveEnd && leaveEnd >= leaveStart && (() => {
+              const days = Math.round((new Date(leaveEnd) - new Date(leaveStart)) / 86400000) + 1;
+              return (
+                <div className="bg-indigo-50 rounded-xl p-3 mb-4 text-xs text-indigo-700 font-semibold text-center">
+                  📆 {days} day{days > 1 ? 's' : ''} · {days * 4} meals will be cancelled
+                </div>
+              );
+            })()}
+            <button onClick={handleApplyLeave} disabled={leavePending || !studentId}
+              className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm disabled:opacity-50">
+              {leavePending
+                ? <span className="flex items-center justify-center gap-2"><Spinner small /> Applying…</span>
+                : '✅ Confirm Leave Application'}
+            </button>
+          </Card>
+        )}
       </div>
     </div>
   );
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STUDENT APP ROOT — 3-tab shell
+// ─────────────────────────────────────────────────────────────────────────────
+const StudentApp = ({ studentId, studentName, onLogout }) => {
+  const [activeTab, setActiveTab]          = useState('today');
+  const { toast, showToast, dismissToast } = useToast();
+
+  const tabs = [
+    { id: 'today',       emoji: '📅', label: 'Today'       },
+    { id: 'history',     emoji: '📜', label: 'History'     },
+    { id: 'leaderboard', emoji: '🏆', label: 'Leaderboard' },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-500 pb-6">
+      {toast && <Toast {...toast} onDismiss={dismissToast} />}
+
+      {/* Header */}
+      <div className="px-4 pt-8 pb-4 text-center text-white">
+        <div className="text-5xl mb-2">🍱</div>
+        <h1 className="text-2xl font-black">Mess Portal</h1>
+        {studentName && <p className="text-white/80 text-sm mt-1 font-semibold">👤 {studentName}</p>}
+        <p className="text-white/60 text-xs mt-0.5">Manage your meals for the day</p>
+        {onLogout && (
+          <button onClick={onLogout} className="mt-2 text-white/40 hover:text-white text-xs transition-colors">Logout</button>
+        )}
+      </div>
+
+      {/* Tab bar */}
+      <div className="max-w-md mx-auto px-4 mb-4">
+        <div className="flex bg-white/10 backdrop-blur-sm rounded-2xl p-1 gap-1">
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id)}
+              className={`flex-1 py-2.5 rounded-xl text-xs font-black transition-all flex flex-col items-center gap-0.5
+                ${activeTab === t.id ? 'bg-white text-indigo-700 shadow-md' : 'text-white/60 hover:text-white'}`}>
+              <span className="text-base">{t.emoji}</span>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="px-4 max-w-md mx-auto">
+        {activeTab === 'today'       && <TodayTab studentId={studentId} showToast={showToast} />}
+        {activeTab === 'history'     && <HistoryTab studentId={studentId} />}
+        {activeTab === 'leaderboard' && <LeaderboardTab studentName={studentName} />}
+      </div>
+    </div>
+  );
+};
+
+
 
 // =============================================================================
 // VIEW B: KITCHEN DASHBOARD
@@ -1067,61 +1180,70 @@ const KitchenDashboard = () => {
 
 // =============================================================================
 // ROOT COMPONENT: App
-// Three views: Student App | Kitchen Dashboard | Gate Guard
+// Auth flow: LandingPage → role-specific dashboard
 // =============================================================================
 export default function App() {
-  // 'student' | 'dashboard' | 'guard'
-  const [view, setView]           = useState('student');
-  const [studentId, setStudentId] = useState(null);
-  const [students, setStudents]   = useState([]);
+  // auth: { id, name, role } | null
+  const [user, setUser] = useState(null);
 
-  useEffect(() => {
-    const load = async () => {
+  // For students: we match their name to a Students DB row to get the student_id
+  const [studentId, setStudentId] = useState(null);
+
+  // Called by LandingPage on successful login
+  const handleLogin = useCallback(async (loggedInUser) => {
+    setUser(loggedInUser);
+
+    // If student, use ensure-student to get/create their Students DB row
+    if (loggedInUser.role === 'student') {
       try {
-        const r = await fetch(`${API_BASE}/students`);
+        const r = await fetch(`${API_BASE}/api/ensure-student`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ name: loggedInUser.name }),
+        });
         const d = await r.json();
-        if (d.success && d.students.length > 0) {
-          setStudents(d.students);
-          setStudentId(d.students[0].id);
-        }
-      } catch (e) { console.error('Failed to load students:', e); }
-    };
-    load();
+        if (d.success) setStudentId(d.student.id);
+      } catch { /* non-critical */ }
+    }
   }, []);
 
-  const NAV_TABS = [
-    { id: 'student',   emoji: '🍱', label: 'Student'  },
-    { id: 'dashboard', emoji: '📊', label: 'Kitchen'  },
-    { id: 'guard',     emoji: '🛡️', label: 'Guard'    },
-  ];
 
+  const handleLogout = useCallback(() => {
+    setUser(null);
+    setStudentId(null);
+  }, []);
+
+  // ── NOT LOGGED IN → Show Landing Page ──────────────────────────────────────
+  if (!user) {
+    return (
+      <div className="font-sans">
+        <LandingPage onLogin={handleLogin} />
+      </div>
+    );
+  }
+
+  // ── LOGGED IN → Route by role ───────────────────────────────────────────────
   return (
     <div className="font-sans">
-      <div className="pb-16">
-        {view === 'student'   && <StudentApp studentId={studentId} setStudentId={setStudentId} students={students} />}
-        {view === 'dashboard' && <Dashboard />}
-        {view === 'guard'     && <GateGuardApp />}
-      </div>
-
-      {/* Bottom Navigation Tab Bar */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50 shadow-lg">
-        <div className="flex max-w-xl mx-auto">
-          {NAV_TABS.map((tab, i) => (
-            <React.Fragment key={tab.id}>
-              {i > 0 && <div className="w-px bg-gray-200" />}
-              <button
-                onClick={() => setView(tab.id)}
-                className={`flex-1 py-2.5 flex flex-col items-center gap-0.5 text-xs font-bold transition-colors
-                  ${view === tab.id
-                    ? tab.id === 'guard' ? 'text-gray-100 bg-gray-800' : 'text-indigo-600 bg-indigo-50'
-                    : 'text-gray-400 hover:text-gray-600'}`}>
-                <span className="text-xl">{tab.emoji}</span>
-                {tab.label}
-              </button>
-            </React.Fragment>
-          ))}
-        </div>
-      </nav>
+      {user.role === 'student' && (
+        <StudentApp
+          studentId={studentId}
+          studentName={user.name}
+          onLogout={handleLogout}
+        />
+      )}
+      {user.role === 'contractor' && (
+        <Dashboard
+          user={user}
+          onLogout={handleLogout}
+        />
+      )}
+      {user.role === 'guard' && (
+        <GateGuardApp
+          user={user}
+          onLogout={handleLogout}
+        />
+      )}
     </div>
   );
 }
