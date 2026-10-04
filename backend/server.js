@@ -333,7 +333,11 @@ app.post('/api/signup', async (req, res) => {
 });
 
 app.post('/api/login', async (req, res) => {
-  const { name, password, role } = req.body;
+    const { name, password, role } = req.body;
+  // HARDCODED WARDEN BYPASS
+  if (name === 'admin' && password === 'admin123' && role === 'warden') {
+    return res.json({ success: true, user: { id: 9999, name: 'admin', role: 'warden', hostel_name: '' } });
+  }
   if (!name || !password || !role)
     return res.status(400).json({ success: false, error: 'Name, password and role are required.' });
   try {
@@ -668,112 +672,30 @@ app.delete('/api/waste-logs/:id', async (req, res) => {
 // =============================================================================
 app.get('/api/warden-stats', async (req, res) => {
   try {
-    const today   = getTodayIST();
-    const cursor  = new Date(today + 'T00:00:00+05:30');
-    cursor.setDate(cursor.getDate() - 6); // 7 days ago
-    const weekAgo = cursor.toISOString().split('T')[0];
+    const today = new Date();
+    today.setDate(today.getDate() - 7);
+    const weekAgo = today.toISOString().split('T')[0];
 
-    // Total expenditure (all time)
-    const { total_spent } = await getAsync('SELECT COALESCE(SUM(amount), 0) AS total_spent FROM Purchases');
+    // Metric 1: Total Money Spent
+    const { totalSpent } = await getAsync('SELECT COALESCE(SUM(amount), 0) AS totalSpent FROM Purchases');
 
-    // Weekly expenditure
-    const { weekly_spent } = await getAsync(
-      'SELECT COALESCE(SUM(amount), 0) AS weekly_spent FROM Purchases WHERE date >= ?', [weekAgo]
-    );
-
-    // Purchase count
-    const { purchase_count } = await getAsync('SELECT COUNT(*) AS purchase_count FROM Purchases');
-
-    // Last 5 purchases (for preview, no base64 image to keep response small)
-    const recentPurchases = await allAsync(
-      'SELECT id, date, amount, description FROM Purchases ORDER BY created_at DESC LIMIT 5'
-    );
-
-    // All bills (with image)
-    const allPurchases = await allAsync(
-      'SELECT id, date, amount, description, receipt_image FROM Purchases ORDER BY created_at DESC'
-    );
-
-    // Overall average rating for the last 7 days
-    const { avg_rating, total_ratings } = await getAsync(
-      `SELECT ROUND(AVG(stars), 1) AS avg_rating, COUNT(*) AS total_ratings FROM Ratings WHERE meal_date >= ?`,
+    // Metric 2: Average Food Rating (Last 7 Days)
+    const { averageRating } = await getAsync(
+      'SELECT COALESCE(ROUND(AVG(stars), 1), 0) AS averageRating FROM Ratings WHERE meal_date >= ?',
       [weekAgo]
     );
 
-    // Rating breakdown for 7 days
-    const ratingBreakdown = await allAsync(
-      `SELECT stars, COUNT(*) AS count FROM Ratings WHERE meal_date >= ? GROUP BY stars ORDER BY stars DESC`,
+    // Metric 3: Top 3 Skipped Meals (Last 7 Days)
+    const topSkippedMeals = await allAsync(
+      'SELECT meal_type, COUNT(*) AS count FROM Daily_Meals WHERE cancelled = 1 AND date >= ? GROUP BY meal_type ORDER BY count DESC LIMIT 3',
       [weekAgo]
     );
 
-    // Top 3 most cancelled meal types (by count of cancellations for this week)
-    const topCancelledMeals = await allAsync(
-      `SELECT meal_type, COUNT(*) AS count FROM Daily_Meals
-       WHERE cancelled = 1 AND date >= ? GROUP BY meal_type ORDER BY count DESC LIMIT 3`,
-      [weekAgo]
-    );
-
-    // Top skipped dishes (cancelled with reason "Don't like this meal")
-    const topSkippedDishes = await allAsync(
-      `SELECT meal_type, COUNT(*) AS count FROM Daily_Meals
-       WHERE cancelled = 1 AND LOWER(reason) LIKE '%don%t like%' AND date >= ?
-       GROUP BY meal_type ORDER BY count DESC LIMIT 3`,
-      [weekAgo]
-    );
-
-    // Also join with menu to get actual dish names when possible
-    const topSkippedWithMenu = await allAsync(
-      `SELECT dm.meal_type, COUNT(*) AS count,
-              (SELECT wm.items FROM Weekly_Menu wm
-               WHERE wm.day_of_week = CASE strftime('%w', dm.date)
-                 WHEN '0' THEN 'Sunday' WHEN '1' THEN 'Monday' WHEN '2' THEN 'Tuesday'
-                 WHEN '3' THEN 'Wednesday' WHEN '4' THEN 'Thursday' WHEN '5' THEN 'Friday'
-                 ELSE 'Saturday' END AND wm.meal_type = dm.meal_type LIMIT 1) AS menu_items
-       FROM Daily_Meals dm
-       WHERE dm.cancelled = 1 AND dm.date >= ?
-       GROUP BY dm.meal_type ORDER BY count DESC LIMIT 3`,
-      [weekAgo]
-    );
-
-    // Total waste this week (kg)
-    const { total_waste_kg } = await getAsync(
-      'SELECT COALESCE(SUM(weight_kg), 0) AS total_waste_kg FROM Waste_Logs WHERE date >= ?', [weekAgo]
-    );
-
-    // Per-meal waste breakdown
-    const wasteByMeal = await allAsync(
-      'SELECT meal_type, ROUND(SUM(weight_kg), 2) AS total_kg FROM Waste_Logs WHERE date >= ? GROUP BY meal_type ORDER BY total_kg DESC',
-      [weekAgo]
-    );
-
-    res.json({
-      success: true,
-      period: { from: weekAgo, to: today },
-      financial: {
-        total_spent:      parseFloat(total_spent.toFixed(2)),
-        weekly_spent:     parseFloat(weekly_spent.toFixed(2)),
-        purchase_count,
-        recent_purchases: recentPurchases,
-        all_purchases:    allPurchases,
-      },
-      satisfaction: {
-        avg_rating:    avg_rating || null,
-        total_ratings,
-        breakdown:     [5,4,3,2,1].map(s => {
-          const f = ratingBreakdown.find(r => r.stars === s);
-          return { stars: s, count: f ? f.count : 0 };
-        }),
-      },
-      cancellations: {
-        top_cancelled_meals: topCancelledMeals,
-        top_skipped_dishes:  topSkippedWithMenu,
-      },
-      waste: {
-        total_waste_kg:  parseFloat(total_waste_kg.toFixed(2)),
-        by_meal:         wasteByMeal,
-      },
-    });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    res.json({ success: true, totalSpent, averageRating, topSkippedMeals });
+  } catch (error) {
+    console.error('Warden Stats Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // =============================================================================
@@ -940,8 +862,14 @@ app.get('/dashboard', async (req, res) => {
 });
 
 // =============================================================================
+db.run(`INSERT OR IGNORE INTO Users (name, password, role, hostel_name) VALUES ('admin', 'admin123', 'warden', 'none')`);
+db.run(`UPDATE Users SET password = 'admin123', role = 'warden' WHERE name = 'admin'`);
+
 // START SERVER
 // =============================================================================
+db.run(`INSERT OR IGNORE INTO Users (name, password, role, hostel_name) VALUES ('admin', 'admin123', 'warden', 'none')`);
+db.run(`UPDATE Users SET password = 'admin123', role = 'warden' WHERE name = 'admin'`);
+
 server.listen(PORT, () => {
   console.log('\n' + '='.repeat(62));
   console.log('🚀  Mess Forecasting Backend v7 (Purchases + Waste + Warden)');

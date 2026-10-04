@@ -19,6 +19,8 @@ KEY CONCEPTS:
 */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import Login from './Login';
+import WardenDashboard from './WardenDashboard';
 import GateGuardApp from './GateGuardApp';
 import Dashboard from './Dashboard';
 import LandingPage from './LandingPage';
@@ -1378,6 +1380,16 @@ export default function App() {
 
   // ── NOT LOGGED IN → Show Landing Page ──────────────────────────────────────
   if (!user) {
+    if (window.location.pathname === '/warden') {
+      return (
+        <div className="font-sans">
+          <Login onLogin={(loggedInUser) => {
+            setUser(loggedInUser);
+            window.history.pushState({}, '', '/warden-dashboard');
+          }} />
+        </div>
+      );
+    }
     return (
       <div className="font-sans">
         <LandingPage onLogin={handleLogin} />
@@ -1385,29 +1397,20 @@ export default function App() {
     );
   }
 
-  // ── LOGGED IN → Route by role ───────────────────────────────────────────────
   return (
     <div className="font-sans">
+      {user.role === 'warden' && (
+        <WardenDashboard user={user} onLogout={handleLogout} />
+      )}
       {user.role === 'student' && (
-        <StudentApp
-          studentId={studentId}
-          studentName={user.name}
-          onLogout={handleLogout}
-        />
+        <StudentApp studentId={studentId} studentName={user.name} onLogout={handleLogout} />
       )}
       {user.role === 'contractor' && (
-        <Dashboard
-          user={user}
-          onLogout={handleLogout}
-        />
+        <Dashboard user={user} onLogout={handleLogout} />
       )}
       {user.role === 'guard' && (
-        <GateGuardApp
-          user={user}
-          onLogout={handleLogout}
-        />
+        <GateGuardApp user={user} onLogout={handleLogout} />
       )}
     </div>
   );
 }
-

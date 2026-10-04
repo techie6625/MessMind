@@ -173,7 +173,13 @@ export default function LandingPage({ onLogin }) {
           ))}
         </div>
 
-        <p className="relative z-10 text-slate-600 text-xs mt-12 text-center font-semibold">
+        
+          <div className="text-center mt-6 mb-4 relative z-10">
+            <a href="/warden" className="text-slate-400 hover:text-white text-sm font-bold border-b border-slate-600 hover:border-white transition-all">
+              🏛️ Warden Portal (Admin)
+            </a>
+          </div>
+<p className="relative z-10 text-slate-600 text-xs mt-12 text-center font-semibold">
           © 2025 MessMind · Hackathon Project
         </p>
       </div>
@@ -314,6 +320,14 @@ export default function LandingPage({ onLogin }) {
           </p>
         </form>
 
+<div className="text-center mt-6">
+  <a href="/warden" className="text-slate-400 hover:text-white text-sm font-bold border-b border-slate-600 hover:border-white transition-all">
+    🏛️ Warden Portal (Admin)
+  </a>
+</div>
+
+
+
         {/* Test credentials */}
         <div className="mt-5 bg-white/5 backdrop-blur-md border border-white/10 rounded-xl p-4 text-xs text-slate-400 shadow-inner">
           <p className="font-bold text-white mb-1.5">🧪 Test Credentials</p>
@@ -322,6 +336,8 @@ export default function LandingPage({ onLogin }) {
             <p>Contractor → <span className="text-cyan-300 font-mono">Mess Contractor / contractor123</span></p>
             <p>Guard → <span className="text-cyan-300 font-mono">Gate Guard / guard123</span></p>
           </div>
+        
+        
         </div>
       </div>
     </div>
