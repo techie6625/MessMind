@@ -143,128 +143,162 @@ const PageLoader = () => (
   </div>
 );
 
-// Toast notification — a dismissible floating message
+// Toast notification — glass dark floating message
 const Toast = ({ message, type = 'success', onDismiss }) => {
   useEffect(() => {
-    const t = setTimeout(onDismiss, 3500); // Auto-dismiss after 3.5 s
+    const t = setTimeout(onDismiss, 3500);
     return () => clearTimeout(t);
   }, [onDismiss]);
 
-  const colors = {
-    success: 'bg-green-600',
-    error:   'bg-red-600',
-    info:    'bg-indigo-600',
+  const styles = {
+    success: 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300',
+    error:   'bg-rose-500/20 border-rose-500/40 text-rose-300',
+    info:    'bg-cyan-500/20 border-cyan-500/40 text-cyan-300',
   };
 
   return (
-    <div className={`fixed top-4 right-4 z-50 ${colors[type]} text-white px-5 py-3 rounded-2xl
-                     shadow-xl flex items-center gap-3 max-w-xs animate-bounce-in`}>
+    <div className={`fixed top-4 right-4 z-50 ${styles[type]} border backdrop-blur-xl
+                     px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3 max-w-xs`}>
       <span className="text-lg">{type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</span>
       <span className="text-sm font-medium">{message}</span>
-      <button onClick={onDismiss} className="ml-2 opacity-70 hover:opacity-100 text-lg leading-none">×</button>
+      <button onClick={onDismiss} className="ml-2 opacity-50 hover:opacity-100 text-lg leading-none">×</button>
     </div>
   );
 };
 
-// Reusable section card wrapper
+// Reusable glass card wrapper
 const Card = ({ children, className = '' }) => (
-  <div className={`bg-white rounded-2xl shadow-sm border border-gray-100 p-5 ${className}`}>
+  <div className={`bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-5 ${className}`}>
     {children}
   </div>
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMPONENT: MealToggleCard
-// One of the 4 meal toggle buttons on the Student App.
-// Displays: meal icon, name, menu items, deadline label, and a cancel/reinstate toggle.
-//
-// Props:
-//   mealType   — 'Breakfast' | 'Lunch' | 'Snacks' | 'Dinner'
-//   cancelled  — boolean: is this meal currently cancelled?
-//   locked     — boolean: past the deadline, cannot change
-//   menuItems  — string: comma-separated food items for this meal
-//   onToggle   — function called when the button is clicked
-//   loading    — boolean: API call in progress
+// COMPONENT: MealToggleCard — with reason-prompt before cancellation
 // ─────────────────────────────────────────────────────────────────────────────
+const CANCEL_REASONS = [
+  'Ordered online',
+  "Don't like this meal",
+  'Other reasons',
+];
+
 const MealToggleCard = ({ mealType, cancelled, locked, menuItems, onToggle, loading }) => {
   const cfg = MEAL_CONFIG[mealType];
+  const [showReasonPicker, setShowReasonPicker] = useState(false);
+  const [selectedReason,   setSelectedReason]   = useState('');
+
+  const stateStyles = {
+    locked:    { card: 'bg-white/3 border-white/5 opacity-50',                             badge: 'bg-white/10 text-slate-500 border-white/10' },
+    cancelled: { card: 'bg-rose-500/10 border-rose-500/30 shadow-rose-500/10',             badge: 'bg-rose-500/20 text-rose-300 border-rose-500/30' },
+    active:    { card: 'bg-emerald-500/8 border-emerald-500/20 shadow-emerald-500/5',      badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
+  };
+  const state = locked ? 'locked' : cancelled ? 'cancelled' : 'active';
+  const s = stateStyles[state];
+
+  const handleCancelClick = () => {
+    if (cancelled) { onToggle(''); return; } // reinstating — no reason needed
+    setShowReasonPicker(true);
+    setSelectedReason('');
+  };
+
+  const handleConfirmCancel = () => {
+    if (!selectedReason) return;
+    setShowReasonPicker(false);
+    onToggle(selectedReason);
+  };
 
   return (
-    <div className={`
-      rounded-2xl border-2 p-4 bg-gradient-to-br transition-all duration-200
-      ${cfg.colorBg} ${cfg.colorBorder}
-      ${locked ? 'opacity-60 cursor-not-allowed' : 'hover:shadow-md'}
-      ${cancelled ? 'opacity-75' : ''}
-    `}>
-      {/* Top row: icon + meal name + status badge */}
+    <div className={`rounded-2xl border p-4 transition-all duration-300 shadow-lg
+      ${s.card} ${!locked ? 'hover:-translate-y-0.5 hover:shadow-xl' : 'cursor-not-allowed'}`}>
+      {/* Top row */}
       <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <span className="text-2xl">{cfg.icon}</span>
           <div>
-            <p className={`font-bold text-sm ${cfg.colorText}`}>{cfg.label}</p>
-            <p className="text-xs text-gray-400">{cfg.timeLabel}</p>
+            <p className="font-bold text-sm text-white">{cfg.label}</p>
+            <p className="text-xs text-slate-500">{cfg.timeLabel}</p>
           </div>
         </div>
-        {/* Status badge: locked / cancelled / active */}
-        <span className={`text-xs font-bold px-2 py-1 rounded-full ${
-          locked    ? 'bg-gray-100 text-gray-500' :
-          cancelled ? 'bg-red-100 text-red-600'   :
-                      `${cfg.colorBadge}`
-        }`}>
+        <span className={`text-xs font-bold px-2.5 py-1 rounded-full border ${s.badge}`}>
           {locked ? '🔒 Locked' : cancelled ? '❌ Off' : '✅ On'}
         </span>
       </div>
 
-      {/* Menu items for this meal */}
+      {/* Menu items */}
       {menuItems && (
-        <p className="text-xs text-gray-500 mb-3 leading-relaxed border-t border-gray-200 pt-2 mt-1">
-          <span className="font-semibold text-gray-600">Today: </span>{menuItems}
+        <p className="text-xs text-slate-500 mb-3 leading-relaxed border-t border-white/10 pt-2 mt-1">
+          <span className="font-semibold text-slate-400">Today: </span>{menuItems}
         </p>
       )}
 
+      {/* Reason picker — shown when about to cancel */}
+      {showReasonPicker && !cancelled && (
+        <div className="mb-3 p-3 rounded-xl bg-white/5 border border-white/10 space-y-2 animate-fade-in">
+          <p className="text-xs font-bold text-slate-300 uppercase tracking-widest mb-2">Why are you cancelling?</p>
+          {CANCEL_REASONS.map((reason, i) => (
+            <button key={i} onClick={() => setSelectedReason(reason)}
+              className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold border transition-all
+                ${selectedReason === reason
+                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                  : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10 hover:text-white'}`}>
+              {i + 1}. {reason}
+            </button>
+          ))}
+          <div className="flex gap-2 pt-1">
+            <button onClick={handleConfirmCancel} disabled={!selectedReason}
+              className="flex-1 py-2 bg-gradient-to-r from-rose-500 to-pink-600 text-white rounded-xl text-xs font-black
+                         disabled:opacity-40 hover:brightness-110 transition-all active:scale-95">
+              ✓ Confirm Cancel
+            </button>
+            <button onClick={() => setShowReasonPicker(false)}
+              className="px-4 py-2 bg-white/5 border border-white/10 text-slate-400 rounded-xl text-xs font-bold
+                         hover:bg-white/10 hover:text-white transition-all">
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Toggle button */}
-      <button
-        onClick={onToggle}
-        disabled={locked || loading}
-        className={`
-          w-full py-2.5 rounded-xl text-white text-sm font-bold transition-all duration-200
-          ${locked ? 'bg-gray-300 cursor-not-allowed' :
-            loading ? 'bg-gray-400 cursor-wait' :
-            cancelled ? 'bg-green-500 hover:bg-green-600' :
-            `${cfg.colorBtn}`
+      {!showReasonPicker && (
+        <button
+          onClick={handleCancelClick}
+          disabled={locked || loading}
+          className={`w-full py-2.5 rounded-xl text-white text-sm font-black transition-all duration-200 active:scale-95
+            ${locked    ? 'bg-white/5 text-slate-600 cursor-not-allowed border border-white/5' :
+              loading   ? 'bg-white/10 cursor-wait' :
+              cancelled ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 shadow-lg shadow-emerald-500/20' :
+                          'bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 shadow-lg shadow-rose-500/20'
+            }`}
+        >
+          {loading ? <span className="flex items-center justify-center gap-2"><Spinner small /> Updating…</span>
+            : locked    ? 'Deadline passed'
+            : cancelled ? `✅ Reinstate ${cfg.label}`
+            :             `🚫 Cancel ${cfg.label}`
           }
-        `}
-      >
-        {loading ? <span className="flex items-center justify-center gap-2"><Spinner small /> Updating…</span>
-          : locked    ? 'Deadline passed'
-          : cancelled ? `✅ Reinstate ${cfg.label}`
-          :             `🛵 Cancel ${cfg.label}`
-        }
-      </button>
+        </button>
+      )}
     </div>
   );
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMPONENT: StatCard
-// Metric card for the Kitchen Dashboard overview.
+// COMPONENT: StatCard — glass dark KPI card
 // ─────────────────────────────────────────────────────────────────────────────
 const StatCard = ({ title, value, subtitle, emoji, highlight = false }) => (
-  <div className={`
-    rounded-2xl border-2 p-5 flex flex-col gap-2 transition-all
+  <div className={`rounded-2xl border p-4 flex flex-col gap-1.5 transition-all duration-300
     ${highlight
-      ? 'border-green-400 bg-green-50 shadow-lg shadow-green-100 scale-105'
-      : 'border-gray-100 bg-white shadow-sm'
-    }
-  `}>
-    <div className="text-3xl">{emoji}</div>
-    <div className={`text-4xl font-black ${highlight ? 'text-green-600' : 'text-gray-800'}`}>
-      {value ?? '—'}
-    </div>
-    <div className="font-semibold text-gray-600 text-sm">{title}</div>
-    {subtitle && <div className="text-xs text-gray-400">{subtitle}</div>}
+      ? 'bg-emerald-500/10 border-emerald-500/30 shadow-lg shadow-emerald-500/10'
+      : 'bg-white/5 border-white/10 hover:bg-white/8 hover:border-white/20 hover:-translate-y-0.5'
+    }`}>
+    <div className="text-2xl">{emoji}</div>
+    <div className={`text-4xl font-black ${highlight ? 'text-emerald-400' : 'text-white'}`}>{value ?? '—'}</div>
+    <div className={`font-semibold text-xs ${highlight ? 'text-emerald-300' : 'text-slate-400'}`}>{title}</div>
+    {subtitle && <div className={`text-xs leading-tight ${highlight ? 'text-emerald-400/60' : 'text-slate-500'}`}>{subtitle}</div>}
   </div>
 );
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CUSTOM HOOK: useToast
@@ -284,7 +318,71 @@ const useToast = () => {
 
 // =============================================================================
 // ─────────────────────────────────────────────────────────────────────────────
-// HISTORY TAB — past meals: Ate vs Skipped with cancel time
+// STAR RATING WIDGET — anonymous post-meal rating (per student device only)
+// ─────────────────────────────────────────────────────────────────────────────
+const StarRating = ({ mealDate, mealType }) => {
+  // Store submitted ratings in localStorage so we don't re-prompt
+  const storageKey = `rating_${mealDate}_${mealType}`;
+  const saved = parseInt(localStorage.getItem(storageKey) || '0', 10);
+
+  const [selected, setSelected] = useState(saved);
+  const [hovered,  setHovered]  = useState(0);
+  const [submitted, setSubmitted] = useState(saved > 0);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!selected || submitting) return;
+    setSubmitting(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/ratings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meal_date: mealDate, meal_type: mealType, stars: selected }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        localStorage.setItem(storageKey, String(selected));
+        setSubmitted(true);
+      }
+    } catch { /* silent */ }
+    finally { setSubmitting(false); }
+  };
+
+  if (submitted) {
+    return (
+      <div className="flex items-center gap-1.5 mt-2">
+        <span className="text-amber-400 text-xs">{'⭐'.repeat(selected)}</span>
+        <span className="text-slate-500 text-[10px] font-semibold">Rated</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2.5 pt-2 border-t border-white/10">
+      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1.5">Rate this meal</p>
+      <div className="flex items-center gap-1.5">
+        {[1,2,3,4,5].map(s => (
+          <button key={s}
+            onMouseEnter={() => setHovered(s)}
+            onMouseLeave={() => setHovered(0)}
+            onClick={() => setSelected(s)}
+            className={`text-xl transition-all duration-100 ${s <= (hovered || selected) ? 'text-amber-400 scale-110' : 'text-slate-600'}`}>
+            ★
+          </button>
+        ))}
+        {selected > 0 && (
+          <button onClick={handleSubmit} disabled={submitting}
+            className="ml-2 text-[10px] font-black px-2.5 py-1 bg-amber-500/20 border border-amber-500/30 text-amber-300
+                       rounded-full hover:brightness-110 disabled:opacity-50 transition-all active:scale-95">
+            {submitting ? '…' : 'Submit'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTORY TAB — past meals: Ate vs Skipped + star rating for Ate meals
 // ─────────────────────────────────────────────────────────────────────────────
 const HistoryTab = ({ studentId }) => {
   const [history, setHistory] = useState([]);
@@ -303,41 +401,44 @@ const HistoryTab = ({ studentId }) => {
   }, [studentId]);
 
   if (!studentId) return (
-    <div className="text-center py-10 text-white/60">
+    <div className="text-center py-10 text-slate-500">
       <p className="text-2xl mb-2">📋</p><p>No student linked.</p>
     </div>
   );
   if (loading) return (
     <div className="flex justify-center py-12">
-      <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+      <div className="w-8 h-8 border-2 border-white/20 border-t-cyan-400 rounded-full animate-spin" />
     </div>
   );
   if (history.length === 0) return (
-    <div className="text-center py-10 text-white/60">
+    <div className="text-center py-10 text-slate-500">
       <p className="text-3xl mb-2">🍽️</p>
       <p className="font-semibold">No meal history yet.</p>
     </div>
   );
 
+  const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
   return (
-    <div className="space-y-3 pb-6">
-      <p className="text-white/60 text-xs text-center font-semibold uppercase tracking-wide">
-        Last 14 Days · Tap a meal to see details
+    <div className="space-y-3 pb-6 relative z-10">
+      <p className="text-slate-500 text-[10px] text-center font-bold uppercase tracking-widest mb-4">
+        Last 14 Days · Rate your meals ⭐
       </p>
       {history.map(day => (
-        <div key={day.date} className="bg-white/10 rounded-2xl p-4 border border-white/10">
+        <div key={day.date} className="bg-white/5 backdrop-blur-xl rounded-2xl p-4 border border-white/10 hover:bg-white/10 transition-colors">
           <div className="flex items-center justify-between mb-3">
             <span className="text-white font-bold text-sm">
               {new Date(day.date + 'T00:00:00').toLocaleDateString('en-IN', {
                 weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata'
               })}
             </span>
-            <span className="text-white/50 text-xs font-mono">{day.date}</span>
+            <span className="text-slate-400 text-xs font-mono">{day.date}</span>
           </div>
           <div className="grid grid-cols-2 gap-2">
             {MEAL_TYPES.map(mealType => {
               const meal = day.meals[mealType];
               const skipped    = meal?.cancelled === 1;
+              const isPast     = day.date < todayIST;
               const cancelTime = meal?.cancelled_at
                 ? new Date(meal.cancelled_at.replace(' ', 'T') + 'Z').toLocaleTimeString('en-IN', {
                     timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true
@@ -345,25 +446,42 @@ const HistoryTab = ({ studentId }) => {
                 : null;
               return (
                 <div key={mealType}
-                  className={`rounded-xl px-3 py-2 flex items-center gap-2 text-xs font-semibold
+                  className={`rounded-xl px-3 py-2.5 border transition-all
                     ${skipped
-                      ? 'bg-red-900/50 text-red-300 border border-red-700/50'
-                      : 'bg-green-900/30 text-green-300 border border-green-700/30'}`}>
-                  <span className="text-base">{MEAL_CONFIG[mealType]?.icon}</span>
-                  <div>
-                    <div>{mealType}</div>
-                    {skipped
-                      ? <div className="text-red-400 font-mono" style={{ fontSize: '0.6rem' }}>
-                          Skipped {cancelTime ? `@ ${cancelTime}` : ''}
-                        </div>
-                      : <div className="text-green-400" style={{ fontSize: '0.6rem' }}>Ate ✓</div>}
+                      ? 'bg-rose-500/10 text-rose-300 border-rose-500/20'
+                      : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">{MEAL_CONFIG[mealType]?.icon}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold opacity-90 truncate">{mealType}</div>
+                      {skipped
+                        ? <>
+                            <div className="text-rose-400/80 font-mono" style={{ fontSize: '0.65rem' }}>
+                              Skipped {cancelTime ? `@ ${cancelTime}` : ''}
+                            </div>
+                            {meal?.reason && meal.reason.trim() && (
+                              <div className="text-rose-400/60 italic" style={{ fontSize: '0.6rem' }}>
+                                "{meal.reason}"
+                              </div>
+                            )}
+                          </>
+                        : <div className="text-emerald-400/80" style={{ fontSize: '0.65rem' }}>Ate ✓</div>
+                      }
+                    </div>
                   </div>
+                  {/* Show star rating UI for past Ate meals */}
+                  {!skipped && isPast && (
+                    <StarRating mealDate={day.date} mealType={mealType} />
+                  )}
                 </div>
               );
             })}
           </div>
         </div>
       ))}
+      <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-xl p-3 text-xs text-cyan-300 font-semibold text-center">
+        ⭐ Rate your past meals — all ratings are 100% anonymous!
+      </div>
     </div>
   );
 };
@@ -390,62 +508,66 @@ const LeaderboardTab = ({ studentName }) => {
 
   if (loading) return (
     <div className="flex justify-center py-12">
-      <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+      <div className="w-8 h-8 border-2 border-white/20 border-t-cyan-400 rounded-full animate-spin" />
     </div>
   );
 
   return (
-    <div className="space-y-3 pb-6">
-      <div className="bg-white/10 rounded-2xl p-4 border border-white/10 text-center">
-        <div className="text-3xl mb-1">🏆</div>
-        <h3 className="text-white font-black text-lg">Responsible Eaters</h3>
-        <p className="text-white/60 text-xs mt-1">
+    <div className="space-y-3 pb-6 relative z-10">
+      <div className="bg-gradient-to-br from-indigo-500/20 to-purple-500/10 rounded-2xl p-5 border border-indigo-500/20 text-center shadow-lg shadow-indigo-500/10 mb-2">
+        <div className="text-4xl mb-2">🏆</div>
+        <h3 className="text-white font-black text-lg bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">Responsible Eaters</h3>
+        <p className="text-indigo-300/70 text-xs mt-1 font-semibold">
           10 pts per on-time cancellation · Ranked this month
         </p>
       </div>
 
       {board.length === 0 ? (
-        <div className="text-center text-white/50 py-8">No data yet this month.</div>
+        <div className="text-center text-slate-500 py-8">No data yet this month.</div>
       ) : board.map((entry, i) => {
         const isMe = studentName && entry.name.toLowerCase() === studentName.toLowerCase();
         return (
           <div key={entry.name}
-            className={`flex items-center gap-4 rounded-2xl px-4 py-3 border transition-all
+            className={`flex items-center gap-4 rounded-2xl px-4 py-3 border transition-all duration-300
               ${isMe
-                ? 'bg-indigo-500/30 border-indigo-400/50 shadow-lg shadow-indigo-900/30'
-                : 'bg-white/10 border-white/10'}`}>
+                ? 'bg-gradient-to-r from-indigo-500/20 to-purple-500/10 border-indigo-400/40 shadow-lg shadow-indigo-500/20 scale-[1.02]'
+                : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
             <div className="w-8 text-center flex-shrink-0">
               {i < 3
-                ? <span className="text-2xl">{medals[i]}</span>
-                : <span className="text-white/50 font-black text-sm">#{i + 1}</span>}
+                ? <span className="text-2xl drop-shadow-md">{medals[i]}</span>
+                : <span className="text-slate-500 font-black text-sm">#{i + 1}</span>}
             </div>
-            <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-base flex-shrink-0
-              ${isMe ? 'bg-indigo-500 text-white' : 'bg-white/20 text-white'}`}>
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-base flex-shrink-0 shadow-inner
+              ${isMe ? 'bg-indigo-500 text-white border border-indigo-400' : 'bg-white/10 text-white border border-white/20'}`}>
               {entry.name.charAt(0).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
               <div className={`font-bold text-sm truncate ${isMe ? 'text-indigo-200' : 'text-white'}`}>
-                {entry.name} {isMe && <span className="text-indigo-300 text-xs">(You)</span>}
+                {entry.name} {isMe && <span className="text-indigo-400 text-xs ml-1">(You)</span>}
               </div>
-              <div className="text-white/50 text-xs">{entry.cancellations} cancellations this month</div>
+              <div className="text-slate-500 text-xs font-medium">{entry.cancellations} cancellations this month</div>
             </div>
             <div className="text-right flex-shrink-0">
-              <div className={`font-black text-lg ${isMe ? 'text-yellow-300' : 'text-yellow-400'}`}>
+              <div className={`font-black text-xl leading-none ${isMe ? 'text-yellow-400' : 'text-amber-500'}`}>
                 {entry.points}
               </div>
-              <div className="text-white/40 text-xs">pts</div>
+              <div className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-1">pts</div>
             </div>
           </div>
         );
       })}
 
-      <div className="bg-white/5 rounded-xl border border-white/10 px-4 py-3 text-xs text-white/50 text-center">
+      <div className="bg-cyan-500/10 rounded-xl border border-cyan-500/20 px-4 py-3.5 text-xs text-cyan-300 font-semibold text-center shadow-inner">
         💡 Cancel meals on time to earn points and climb the leaderboard!
       </div>
     </div>
   );
 };
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TODAY TAB — meal toggle cards + leave application
+// ─────────────────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 // TODAY TAB — meal toggle cards + leave application
 // ─────────────────────────────────────────────────────────────────────────────
@@ -496,14 +618,14 @@ const TodayTab = ({ studentId, showToast }) => {
     return istMinutes >= MEAL_CONFIG[mealType].deadline;
   };
 
-  const handleToggle = async (mealType) => {
+  const handleToggle = async (mealType, reason = '') => {
     if (!studentId) { showToast('No student linked to this account', 'info'); return; }
     if (isMealLocked(mealType)) return;
     setLoadingMeal(mealType);
     try {
       const r = await fetch(`${API_BASE}/cancel-meal`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: studentId, date: selectedDate, meal_type: mealType }),
+        body: JSON.stringify({ student_id: studentId, date: selectedDate, meal_type: mealType, reason }),
       });
       const d = await r.json();
       if (d.success) {
@@ -541,21 +663,21 @@ const TodayTab = ({ studentId, showToast }) => {
   const cancelledCount = Object.values(statuses).filter(Boolean).length;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 relative z-10">
       <Card>
-        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">📅 Select Date:</label>
+        <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">📅 Select Date</label>
         <input type="date" value={selectedDate} min={getTodayIST()} onChange={e => setSelectedDate(e.target.value)}
-          className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 text-gray-700 focus:outline-none focus:border-indigo-400 font-medium text-sm" />
-        <p className="text-xs text-gray-400 mt-2 text-center">
+          className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500/60 font-medium text-sm transition-all" />
+        <p className="text-xs text-slate-500 mt-2 text-center">
           {isToday(selectedDate) ? '📍 Today' : `📆 ${formatDisplayDate(selectedDate)} (${getDayName(selectedDate)})`}
-          {!isToday(selectedDate) && <span className="ml-2 text-green-500 font-semibold">All meals unlocked</span>}
+          {!isToday(selectedDate) && <span className="ml-2 text-emerald-400 font-semibold">All meals unlocked</span>}
         </p>
       </Card>
 
       {studentId && (
-        <div className={`rounded-2xl px-5 py-3 flex items-center justify-between font-semibold text-sm
-          ${cancelledCount === 0 ? 'bg-green-100 text-green-700' :
-            cancelledCount === 4 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+        <div className={`rounded-2xl px-5 py-3 flex items-center justify-between font-semibold text-sm border backdrop-blur-md
+          ${cancelledCount === 0 ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' :
+            cancelledCount === 4 ? 'bg-rose-500/10 text-rose-300 border-rose-500/20' : 'bg-amber-500/10 text-amber-300 border-amber-500/20'}`}>
           <span>
             {cancelledCount === 0 ? '✅ All meals active' :
              cancelledCount === 4 ? '🚫 All meals cancelled' :
@@ -572,43 +694,43 @@ const TodayTab = ({ studentId, showToast }) => {
           {MEAL_TYPES.map(mealType => (
             <MealToggleCard key={mealType} mealType={mealType} cancelled={statuses[mealType]}
               locked={isMealLocked(mealType)} menuItems={menu[mealType]}
-              onToggle={() => handleToggle(mealType)} loading={loadingMeal === mealType} />
+              onToggle={(reason) => handleToggle(mealType, reason)} loading={loadingMeal === mealType} />
           ))}
         </div>
       )}
 
       <div className="mt-2">
         <button onClick={() => setShowLeaveForm(v => !v)}
-          className="w-full py-3.5 rounded-2xl bg-white/20 hover:bg-white/30 text-white font-bold text-sm border-2 border-white/30 transition-all backdrop-blur-sm">
+          className="w-full py-3.5 rounded-2xl bg-white/5 hover:bg-white/10 text-white font-bold text-sm border border-white/10 transition-all backdrop-blur-md">
           🏡 {showLeaveForm ? 'Cancel Leave Application' : 'Apply for Leave (Going Home?)'}
         </button>
         {showLeaveForm && (
           <Card className="mt-3">
-            <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><span className="text-xl">🧳</span> Apply for Leave</h3>
-            <p className="text-xs text-gray-400 mb-4">All 4 meals will be automatically cancelled for every day in the range.</p>
+            <h3 className="font-bold text-white mb-4 flex items-center gap-2"><span className="text-xl">🧳</span> Apply for Leave</h3>
+            <p className="text-xs text-slate-400 mb-4">All 4 meals will be automatically cancelled for every day in the range.</p>
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Start Date</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-widest">Start Date</label>
                 <input type="date" value={leaveStart} min={minLeaveDate()}
                   onChange={e => { setLeaveStart(e.target.value); if (e.target.value > leaveEnd) setLeaveEnd(e.target.value); }}
-                  className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 text-sm focus:outline-none focus:border-indigo-400" />
+                  className="w-full px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-cyan-500/60 transition-all" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">End Date</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-widest">End Date</label>
                 <input type="date" value={leaveEnd} min={leaveStart} onChange={e => setLeaveEnd(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-xl border-2 border-gray-200 text-sm focus:outline-none focus:border-indigo-400" />
+                  className="w-full px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-cyan-500/60 transition-all" />
               </div>
             </div>
             {leaveStart && leaveEnd && leaveEnd >= leaveStart && (() => {
               const days = Math.round((new Date(leaveEnd) - new Date(leaveStart)) / 86400000) + 1;
               return (
-                <div className="bg-indigo-50 rounded-xl p-3 mb-4 text-xs text-indigo-700 font-semibold text-center">
+                <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-xl p-3 mb-4 text-xs text-cyan-300 font-semibold text-center">
                   📆 {days} day{days > 1 ? 's' : ''} · {days * 4} meals will be cancelled
                 </div>
               );
             })()}
             <button onClick={handleApplyLeave} disabled={leavePending || !studentId}
-              className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm disabled:opacity-50">
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-black text-sm disabled:opacity-50 transition-all shadow-lg shadow-cyan-500/20">
               {leavePending
                 ? <span className="flex items-center justify-center gap-2"><Spinner small /> Applying…</span>
                 : '✅ Confirm Leave Application'}
@@ -621,7 +743,7 @@ const TodayTab = ({ studentId, showToast }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STUDENT APP ROOT — 3-tab shell
+// STUDENT APP ROOT — 3-tab shell (Glassmorphism dark)
 // ─────────────────────────────────────────────────────────────────────────────
 const StudentApp = ({ studentId, studentName, onLogout }) => {
   const [activeTab, setActiveTab]          = useState('today');
@@ -634,28 +756,33 @@ const StudentApp = ({ studentId, studentName, onLogout }) => {
   ];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-500 pb-6">
+    <div className="min-h-screen bg-[#0B0F19] relative overflow-hidden pb-8">
+      {/* Ambient glow orbs */}
+      <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/8 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-0 left-0 w-96 h-96 bg-cyan-500/6 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-violet-500/4 rounded-full blur-3xl pointer-events-none" />
+
       {toast && <Toast {...toast} onDismiss={dismissToast} />}
 
       {/* Header */}
-      <div className="px-4 pt-8 pb-4 text-center text-white">
-        <div className="text-5xl mb-2">🍱</div>
-        <h1 className="text-2xl font-black">Mess Portal</h1>
-        {studentName && <p className="text-white/80 text-sm mt-1 font-semibold">👤 {studentName}</p>}
-        <p className="text-white/60 text-xs mt-0.5">Manage your meals for the day</p>
+      <div className="relative z-10 px-4 pt-10 pb-6 text-center text-white">
+        <div className="text-5xl mb-3 drop-shadow-2xl">🍱</div>
+        <h1 className="text-3xl font-black bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-400 bg-clip-text text-transparent">Mess Portal</h1>
+        {studentName && <p className="text-white/90 text-sm mt-1.5 font-bold">👤 {studentName}</p>}
+        <p className="text-slate-400 text-xs mt-1">Manage your meals for the day</p>
         {onLogout && (
-          <button onClick={onLogout} className="mt-2 text-white/40 hover:text-white text-xs transition-colors">Logout</button>
+          <button onClick={onLogout} className="mt-3 text-slate-500 hover:text-white border border-white/10 rounded-lg px-3 py-1.5 text-xs transition-colors hover:border-white/20">Logout</button>
         )}
       </div>
 
       {/* Tab bar */}
-      <div className="max-w-md mx-auto px-4 mb-4">
-        <div className="flex bg-white/10 backdrop-blur-sm rounded-2xl p-1 gap-1">
+      <div className="relative z-10 max-w-md mx-auto px-4 mb-5">
+        <div className="flex bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-1.5 gap-1.5">
           {tabs.map(t => (
             <button key={t.id} onClick={() => setActiveTab(t.id)}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-black transition-all flex flex-col items-center gap-0.5
-                ${activeTab === t.id ? 'bg-white text-indigo-700 shadow-md' : 'text-white/60 hover:text-white'}`}>
-              <span className="text-base">{t.emoji}</span>
+              className={`flex-1 py-3 rounded-xl text-xs font-black transition-all flex flex-col items-center gap-1
+                ${activeTab === t.id ? 'bg-white/10 text-white shadow-inner border border-white/5' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}>
+              <span className="text-lg">{t.emoji}</span>
               {t.label}
             </button>
           ))}
