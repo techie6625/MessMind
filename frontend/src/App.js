@@ -22,6 +22,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import GateGuardApp from './GateGuardApp';
 import Dashboard from './Dashboard';
 import LandingPage from './LandingPage';
+import WardenDashboard from './WardenDashboard';
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1403,6 +1404,12 @@ export default function App() {
       )}
       {user.role === 'guard' && (
         <GateGuardApp
+          user={user}
+          onLogout={handleLogout}
+        />
+      )}
+      {user.role === 'warden' && (
+        <WardenDashboard
           user={user}
           onLogout={handleLogout}
         />

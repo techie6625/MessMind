@@ -43,6 +43,15 @@ const ROLES = [
     ring:     'ring-slate-400',
     needsHostel: false,
   },
+  {
+    id:       'warden',
+    emoji:    '🏛️',
+    label:    'Warden',
+    desc:     'Monitor hostel occupancy & student welfare',
+    gradient: 'from-amber-500 to-orange-600',
+    ring:     'ring-amber-400',
+    needsHostel: false,
+  },
 ];
 
 const Spinner = () => (
@@ -321,6 +330,7 @@ export default function LandingPage({ onLogin }) {
             <p>Student → <span className="text-cyan-300 font-mono">Navodit / student123</span></p>
             <p>Contractor → <span className="text-cyan-300 font-mono">Mess Contractor / contractor123</span></p>
             <p>Guard → <span className="text-cyan-300 font-mono">Gate Guard / guard123</span></p>
+            <p>Warden → <span className="text-amber-300 font-mono">Warden / warden123</span></p>
           </div>
         </div>
       </div>
