@@ -41,6 +41,18 @@ const ROLES = [
     desc:     'Log hostel deliveries in real-time',
     gradient: 'from-gray-500 to-slate-600',
     ring:     'ring-slate-400',
+<<<<<<< HEAD
+    needsHostel: false,
+  },
+  {
+    id:       'warden',
+    emoji:    '🏛️',
+    label:    'Warden',
+    desc:     'Monitor hostel occupancy & student welfare',
+    gradient: 'from-amber-500 to-orange-600',
+    ring:     'ring-amber-400',
+=======
+>>>>>>> 00bde25fc7fd19a0eddd476e4b6149a3801bf83a
     needsHostel: false,
   },
 ];
@@ -321,6 +333,10 @@ export default function LandingPage({ onLogin }) {
             <p>Student → <span className="text-cyan-300 font-mono">Navodit / student123</span></p>
             <p>Contractor → <span className="text-cyan-300 font-mono">Mess Contractor / contractor123</span></p>
             <p>Guard → <span className="text-cyan-300 font-mono">Gate Guard / guard123</span></p>
+<<<<<<< HEAD
+            <p>Warden → <span className="text-amber-300 font-mono">Warden / warden123</span></p>
+=======
+>>>>>>> 00bde25fc7fd19a0eddd476e4b6149a3801bf83a
           </div>
         </div>
       </div>
