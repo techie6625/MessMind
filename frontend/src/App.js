@@ -29,7 +29,7 @@ import LandingPage from './LandingPage';
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
-const API_BASE = 'http://localhost:3001';
+const API_BASE = 'http://192.168.137.1:3001';
 
 // MEAL_CONFIG: Central config for all 4 meal types.
 // Contains display properties AND time-gate deadlines (in minutes since midnight IST).
@@ -757,6 +757,28 @@ const StudentApp = ({ studentId, studentName, onLogout }) => {
     { id: 'leaderboard', emoji: '🏆', label: 'Leaderboard' },
   ];
 
+  
+  const triggerTelegramDemo = async () => {
+    try {
+      const response = await fetch('http://192.168.137.1:3001/api/trigger-bot-demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          chatId: '6818379808', // INJECTED EXACTLY AS REQUESTED
+          mealType: 'Lunch' 
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        alert('📲 Notification sent to your Telegram!');
+      } else {
+        alert('Failed: ' + data.error);
+      }
+    } catch (err) {
+      alert('Error triggering demo: ' + err.message);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#0B0F19] relative overflow-hidden pb-8">
       {/* Ambient glow orbs */}
@@ -772,9 +794,10 @@ const StudentApp = ({ studentId, studentName, onLogout }) => {
         <h1 className="text-3xl font-black bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-400 bg-clip-text text-transparent">Mess Portal</h1>
         {studentName && <p className="text-white/90 text-sm mt-1.5 font-bold">👤 {studentName}</p>}
         <p className="text-slate-400 text-xs mt-1">Manage your meals for the day</p>
-        {onLogout && (
+                {onLogout && (
           <button onClick={onLogout} className="mt-3 text-slate-500 hover:text-white border border-white/10 rounded-lg px-3 py-1.5 text-xs transition-colors hover:border-white/20">Logout</button>
         )}
+
       </div>
 
       {/* Tab bar */}

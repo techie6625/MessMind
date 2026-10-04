@@ -18,15 +18,16 @@ const PORT           = 3001;
 const TOTAL_ENROLLED = 500;
 const MEAL_TYPES     = ['Breakfast', 'Lunch', 'Snacks', 'Dinner'];
 const DAYS_OF_WEEK   = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
 const HOSTELS        = ['Chitrakot', 'Mainpat', 'Sirpur', 'Mahanadi', 'Indravati', 'Malhar', 'Kotumsar', 'Seonath'];
 
 const hostelCounts = HOSTELS.reduce((acc, h) => ({ ...acc, [h]: 0 }), {});
 
 const app    = express();
 const server = http.createServer(app);
-const io     = new Server(server, { cors: { origin: 'http://localhost:3000', methods: ['GET', 'POST'] } });
+const io     = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
 
-app.use(cors({ origin: 'http://localhost:3000', methods: ['GET', 'POST', 'PUT', 'DELETE'] }));
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'] }));
 app.use(express.json({ limit: '20mb' })); // allow large base64 images
 
 const DB_PATH = path.join(__dirname, 'mess.db');
@@ -670,6 +671,9 @@ app.delete('/api/waste-logs/:id', async (req, res) => {
 // =============================================================================
 // WARDEN STATS — aggregated analytics endpoint
 // =============================================================================
+
+
+
 app.get('/api/warden-stats', async (req, res) => {
   try {
     const today = new Date();

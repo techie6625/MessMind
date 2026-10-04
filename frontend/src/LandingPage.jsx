@@ -11,7 +11,7 @@ Changes:
 
 import React, { useState, useEffect } from 'react';
 
-const API_BASE = 'http://localhost:3001';
+const API_BASE = 'http://192.168.137.1:3001';
 
 const HOSTELS = ['Chitrakot', 'Mainpat', 'Sirpur', 'Mahanadi', 'Indravati', 'Malhar', 'Kotumsar', 'Seonath'];
 

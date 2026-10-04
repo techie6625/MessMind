@@ -10,8 +10,8 @@ Design: Deep dark bg-[#0B0F19], glassmorphism cards, neon green/cyan accents,
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = 'http://localhost:3001';
-const API_BASE   = 'http://localhost:3001';
+const SOCKET_URL = 'http://192.168.137.1:3001';
+const API_BASE   = 'http://192.168.137.1:3001';
 
 const HOSTEL_CONFIG = [
   { name: 'Chitrakot', gradient: 'from-red-500 to-rose-600',       glow: 'shadow-red-500/30',     emoji: '🏛️' },

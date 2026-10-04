@@ -6,7 +6,7 @@ export default function WardenDashboard({ user, onLogout }) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch('http://localhost:3001/api/warden-stats')
+    fetch('http://192.168.137.1:3001/api/warden-stats')
       .then(res => res.json())
       .then(data => {
         if (data.success) {
