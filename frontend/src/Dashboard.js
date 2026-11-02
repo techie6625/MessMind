@@ -12,8 +12,8 @@ New in v6:
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { io } from 'socket.io-client';
 
-const API_BASE   = 'http://192.168.137.1:3001';
-const SOCKET_URL = 'http://192.168.137.1:3001';
+const API_BASE   = 'https://messmind-api.onrender.com';
+const SOCKET_URL = 'https://messmind-api.onrender.com';
 
 const HOSTELS      = ['Chitrakot', 'Mainpat', 'Sirpur', 'Mahanadi', 'Indravati', 'Malhar', 'Kotumsar', 'Seonath'];
 const MEAL_TYPES   = ['Breakfast', 'Lunch', 'Snacks', 'Dinner'];
