@@ -14,7 +14,7 @@ const sqlite3    = require('sqlite3').verbose();
 const cors       = require('cors');
 const path       = require('path');
 
-const PORT           = 3001;
+const PORT = process.env.PORT || 3001;
 const TOTAL_ENROLLED = 500;
 const MEAL_TYPES     = ['Breakfast', 'Lunch', 'Snacks', 'Dinner'];
 const DAYS_OF_WEEK   = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
