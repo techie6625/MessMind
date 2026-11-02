@@ -29,7 +29,7 @@ import LandingPage from './LandingPage';
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
-const API_BASE = 'http://192.168.137.1:3001';
+const API_BASE = 'https://messmind-api.onrender.com';
 
 // MEAL_CONFIG: Central config for all 4 meal types.
 // Contains display properties AND time-gate deadlines (in minutes since midnight IST).
